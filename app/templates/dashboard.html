@@ -1,0 +1,210 @@
+{% extends "base.html" %}
+{% block content %}
+  <section class="row row-cols-2 row-cols-lg-3 row-cols-xl-6 g-3 mb-4">
+
+    <article class="col">
+      <div class="card shadow-sm h-100">
+        <div class="card-body">
+          <div class="card-title d-flex justify-content-between gap-1">
+            <h3><img alt="Telegram logo" width="32" src="{{ url_for('static', filename='a/telegram.svg') }}"> Telegram</h3>
+            <span class="small {{ 'text-body-success' if status.telegram_ok else 'text-body-danger' }}">
+              {{ 'Polling OK' if status.telegram_ok else 'Polling Error' }}
+            </span>
+          </div>
+          <p class="text-body-secondary mb-1">Last successful poll: {{ status.telegram_last_ok or 'never' }}</p>
+          <p class="text-body-secondary mb-0">Last error: {{ status.telegram_last_error or 'none' }}</p>
+        </div>
+      </div>
+    </article>
+
+    <article class="col">
+      <div class="card shadow-sm h-100">
+        <div class="card-body">
+          <div class="card-title d-flex justify-content-between gap-1">
+            <h3><img alt="MQTT logo" width="32" src="{{ url_for('static', filename='a/mqtt.svg') }}"> MQTT</h3>
+            <span class="small {{ 'text-body-success' if status.mqtt_connected else 'text-body-danger' }}">
+              {{ 'Connected' if status.mqtt_connected else 'Disconnected' }}
+            </span>
+          </div>
+          <p class="text-body-secondary mb-1">Broker: {{ status.mqtt_host }}:{{ status.mqtt_port }}</p>
+          <p class="text-body-secondary mb-0">Last error: {{ status.mqtt_last_error or 'none' }}</p>
+        </div>
+      </div>
+    </article>
+
+    <article class="col">
+      <div class="card shadow-sm h-100">
+        <div class="card-body">
+          <div class="card-title d-flex justify-content-between gap-1">
+            <h3>Native API</h3>
+            <span class="small {{ 'text-body-success' if status.api_errors == 0 else 'text-body-danger' }}">
+              {{ 'Healthy' if status.api_errors == 0 else 'Needs Attention' }}
+            </span>
+          </div>
+          <p class="text-body-secondary mb-1">Cameras with endpoint: {{ status.api_known }}</p>
+          <p class="text-body-secondary mb-1">Probes refreshed: {{ status.api_ready }}</p>
+          <p class="text-body-secondary mb-0">Last successful refresh: {{ status.api_last_ok or 'never' }}</p>
+        </div>
+      </div>
+    </article>
+
+    <article class="col">
+      <div class="card shadow-sm h-100">
+        <div class="card-body">
+          <div class="card-title d-flex justify-content-between gap-1">
+            <h3><img alt="ONVIF logo" height="32" src="{{ url_for('static', filename='a/onvif.svg') }}"></h3>
+            <span class="small {{ 'text-body-success' if status.onvif_errors == 0 else 'text-body-danger' }}">
+              {{ 'Healthy' if status.onvif_errors == 0 else 'Needs Attention' }}
+            </span>
+          </div>
+          <p class="text-body-secondary mb-1">Cameras with endpoint: {{ status.onvif_known }}</p>
+          <p class="text-body-secondary mb-1">Details refreshed: {{ status.onvif_ready }}</p>
+          <p class="text-body-secondary mb-0">Last successful refresh: {{ status.onvif_last_ok or 'never' }}</p>
+        </div>
+      </div>
+    </article>
+
+    <article class="col">
+      <div class="card shadow-sm h-100">
+        <div class="card-body">
+          <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
+            <h3 class="card-title">Runtime</h3>
+            <form action="{{ url_for('reload_config') }}" method="post">
+              <button type="submit" class="btn btn-primary btn-sm">Reload Config</button>
+            </form>
+          </div>
+          <p class="text-body-secondary mb-1">Config path: {{ status.config_path }}</p>
+          <p class="text-body-secondary mb-0">Last reload: {{ status.last_reload_at or 'startup only' }}</p>
+        </div>
+      </div>
+    </article>
+
+    <article class="col">
+      <div class="card shadow-sm h-100">
+        <div class="card-body">
+          <div class="card-title d-flex justify-content-between gap-1">
+            <h3>History</h3>
+            <span class="small {{ 'text-body-success' if status.history_enabled else 'text-body-danger' }}">
+              {{ 'Enabled' if status.history_enabled else 'Disabled' }}
+            </span>
+          </div>
+          <p class="text-body-secondary mb-1">Recent action rows: {{ status.history_recent_actions_limit }}</p>
+          <p class="text-body-secondary mb-0 text-break">DB: {{ status.history_db_path or 'not configured' }}</p>
+        </div>
+      </div>
+    </article>
+
+  </section>
+  <section class="card shadow-sm">
+
+    <div class="card-body">
+      <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3 mb-4">
+        <h3>Cameras</h3>
+        <form action="{{ url_for('rescan_all') }}" method="post">
+          <button type="submit" class="btn btn-outline-secondary btn-sm">Rescan Cameras</button>
+        </form>
+      </div>
+
+      <div class="row row-cols-2 row-cols-lg-3 row-cols-xl-3 row-cols-hd-4 row-cols-fhd-5 row-cols-qhd-6 row-cols-uhd-7 g-3">
+      {% for camera in cameras %}
+        <article class="col">
+          <div class="card h-100 shadow-sm">
+            <a class="ratio ratio-16x9 text-decoration-none bg-body-secondary{% if camera.preview_state != 'placeholder' and camera.status == 'online' %} dashboard-live-preview{% endif %}" href="{{ url_for('camera_detail', camera_id=camera.camera_id) }}">
+            {% if camera.preview_state == 'placeholder' %}
+              <img class="w-100 h-100 object-fit-cover rounded-top p-4" src="{{ url_for('static', filename='a/nostream.svg') }}" alt="No stream available" loading="lazy">
+            {% else %}
+              <img
+                class="w-100 h-100 object-fit-cover rounded-top{% if camera.preview_state == 'stale' %} snapshot-preview-stale{% endif %}"
+                src="{{ url_for('preview_snapshot', camera_id=camera.camera_id, stream='ch1', v=camera.preview_version) }}"
+                alt="{{ camera.name }} preview"
+                loading="lazy"
+                data-preview-image
+                data-snapshot-src="{{ url_for('preview_snapshot', camera_id=camera.camera_id, stream='ch1', v=camera.preview_version) }}"
+                {% if camera.status == 'online' %}data-live-src="{{ url_for('preview_live', camera_id=camera.camera_id, stream='ch1') }}"{% endif %}
+              >
+            {% endif %}
+            </a>
+            <div class="card-body d-flex flex-column">
+              <div class="d-flex justify-content-between align-items-start gap-1">
+                <div>
+                  <h5 class="mb-1"><a class="text-decoration-none" href="{{ url_for('camera_detail', camera_id=camera.camera_id) }}">{{ camera.name }}</a></h5>
+                  <p class="xx-small text-body-secondary mb-0">{{ camera.ip or 'no IP' }} / {{ camera.hostname or 'unknown host' }}</p>
+                  {% if camera.preview_state != 'placeholder' and camera.status == 'online' %}
+                  <p class="xx-small text-body-secondary mb-0">ch1 snapshot by default, ch1 live on hover</p>
+                  {% endif %}
+                  {% if camera.api_streamer %}
+                  <p class="xx-small text-body-secondary mb-0">API: {{ camera.api_status or 'unknown' }} / {{ camera.api_streamer }}</p>
+                  {% endif %}
+                  {% if camera.onvif_label %}
+                  <p class="xx-small text-body-secondary mb-0">{{ camera.onvif_label }}</p>
+                  {% endif %}
+                </div>
+                <span class="badge rounded-pill {{ 'text-bg-success' if camera.status == 'online' else 'text-bg-danger' }}">{{ camera.status }}</span>
+              </div>
+            </div>
+          </div>
+        </article>
+      {% else %}
+        <p class="text-body-secondary mb-0">No cameras discovered yet.</p>
+      {% endfor %}
+      </div>
+    </div>
+  </section>
+
+  <script>
+    (() => {
+      const hoverCapable = window.matchMedia("(hover: hover)").matches;
+      const liveCards = document.querySelectorAll(".dashboard-live-preview");
+
+      for (const card of liveCards) {
+        const image = card.querySelector("[data-preview-image]");
+        if (!image) continue;
+
+        const snapshotSrc = image.dataset.snapshotSrc || image.getAttribute("src") || "";
+        const liveSrc = image.dataset.liveSrc || "";
+        if (!snapshotSrc || !liveSrc) continue;
+
+        let hoverTimer = null;
+        let liveActive = false;
+
+        const enableLivePreview = () => {
+          if (liveActive) return;
+          liveActive = true;
+          const separator = liveSrc.includes("?") ? "&" : "?";
+          image.src = `${liveSrc}${separator}ts=${Date.now()}`;
+        };
+
+        const disableLivePreview = () => {
+          if (hoverTimer !== null) {
+            window.clearTimeout(hoverTimer);
+            hoverTimer = null;
+          }
+          if (!liveActive) return;
+          liveActive = false;
+          image.src = snapshotSrc;
+        };
+
+        if (hoverCapable) {
+          card.addEventListener("pointerenter", () => {
+            if (hoverTimer !== null) {
+              window.clearTimeout(hoverTimer);
+            }
+            hoverTimer = window.setTimeout(() => {
+              hoverTimer = null;
+              enableLivePreview();
+            }, 150);
+          });
+          card.addEventListener("pointerleave", disableLivePreview);
+        }
+
+        card.addEventListener("focusin", enableLivePreview);
+        card.addEventListener("focusout", (event) => {
+          if (card.contains(event.relatedTarget)) {
+            return;
+          }
+          disableLivePreview();
+        });
+      }
+    })();
+  </script>
+{% endblock %}

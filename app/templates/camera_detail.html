@@ -1,0 +1,1552 @@
+{% extends "base.html" %}
+{% block content %}
+  <div class="mb-3" data-camera-detail-page data-camera-id="{{ camera.camera_id }}">
+    <div id="camera-action-feedback" class="alert d-none" role="alert"></div>
+  </div>
+
+  <section class="mb-4">
+    <h2 class="mb-1">{{ camera.name }}</h2>
+    <p class="text-body-secondary mb-0">{{ camera.hostname or 'unknown host' }}{% if camera.ip %} / {{ camera.ip }}{% endif %}{% if camera.api_device_model %} / {{ camera.api_device_model }}{% endif %}</p>
+  </section>
+
+  <div class="row g-3 mb-4">
+
+    <div class="col-12 col-xl-7">
+      <div class="card h-100">
+        <div class="card-body">
+          <h2 class="visually-hidden">Live Preview</h2>
+          <div class="ratio ratio-16x9 bg-body-secondary rounded overflow-hidden">
+            {% if camera.preview_state == 'placeholder' %}
+              <img class="w-100 h-100 object-fit-contain p-4" src="{{ url_for('static', filename='a/nostream.svg') }}" alt="No stream available" loading="eager">
+            {% else %}
+              <img
+                class="w-100 h-100 object-fit-cover{% if camera.preview_state == 'stale' %} snapshot-preview-stale{% endif %}"
+                src="{{ url_for('preview_live', camera_id=camera.camera_id) }}"
+                alt="{{ camera.name }} live preview"
+                loading="eager"
+                data-live-preview-image
+                data-live-src="{{ url_for('preview_live', camera_id=camera.camera_id) }}"
+                data-snapshot-src="{{ url_for('preview_snapshot', camera_id=camera.camera_id) }}"
+                data-fallback-src="{{ url_for('static', filename='a/nostream.svg') }}"
+                data-preview-state="{{ camera.preview_state }}"
+                data-preview-online="{{ 'true' if camera.status == 'online' else 'false' }}"
+                data-preview-version="{{ camera.preview_version }}"
+              >
+            {% endif %}
+          </div>
+          <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mt-3 small text-body-secondary">
+            <span id="live-preview-status-text" data-live-preview-status>Preview uses the live stream when available.</span>
+            <span>API {{ camera.api_status or 'unknown' }}{% if camera.api_streamer %} / {{ camera.api_streamer }}{% endif %}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <article class="col-12 col-xl-5">
+      <div class="card h-100">
+        <div class="card-body">
+          <div class="d-flex justify-content-between align-items-start gap-3 mb-3">
+            <div>
+              <h2 class="card-title h4 mb-1">Quick Controls</h2>
+              <p class="text-body-secondary mb-0">Place the day/night and runtime controls beside the preview, similar to the camera web UI.</p>
+            </div>
+            <span class="badge rounded-pill {{ 'text-bg-success' if camera.status == 'online' else 'text-bg-danger' }}" data-camera-field="status">{{ camera.status }}</span>
+          </div>
+
+          <div class="border rounded p-3 mb-3">
+            <div class="d-flex justify-content-between align-items-start gap-3 mb-2">
+              <div>
+                <h3 class="h6 mb-1">Day/Night</h3>
+                <p class="small text-body-secondary mb-0">Quick mode requests for the native day/night action.</p>
+              </div>
+              <span class="small text-body-secondary">Running: <span id="daynight-running-mode-inline">{{ camera.native_daynight_running_mode or 'unknown' }}</span></span>
+            </div>
+            <div class="btn-group w-100 mb-2" role="group" aria-label="Day night mode">
+              {% for mode in camera.native_daynight_modes %}
+                <button
+                  type="button"
+                  class="btn {% if camera.native_daynight_requested_mode == mode %}btn-primary{% else %}btn-outline-secondary{% endif %}"
+                  data-async-action="{{ url_for('set_daynight', camera_id=camera.camera_id) }}"
+                  data-async-payload='{"daynight_mode":"{{ mode }}"}'
+                  data-daynight-mode-button="{{ mode }}"
+                  {% if not camera.native_daynight_action_supported %}disabled{% endif %}>{{ 'Auto' if mode == 'auto' else mode|capitalize }}</button>
+              {% endfor %}
+            </div>
+            <div class="small text-body-secondary" id="daynight-requested-mode-text">Requested mode: {{ camera.native_daynight_requested_mode }}</div>
+            <div class="small text-body-secondary mt-2">Granular IR light and IR-cut controls are not exposed by the current native API capabilities, so the hub can only offer mode selection here.</div>
+          </div>
+
+          <form action="{{ url_for('apply_supported_config', camera_id=camera.camera_id) }}" method="post" class="border rounded p-3 mb-3" data-async-form>
+            <h3 class="h6 mb-3">Runtime Toggles</h3>
+            <div class="row g-3">
+              <div class="col-12 col-sm-6 d-flex align-items-end">
+                <div class="form-check form-switch mb-0">
+                {% if camera.native_motion_supported %}
+                  <input type="hidden" name="motion_enabled_present" value="1">
+                {% endif %}
+                  <input class="form-check-input" id="motion_enabled" type="checkbox" name="motion_enabled" {% if camera.native_motion_enabled %}checked{% endif %} {% if not camera.native_motion_supported %}disabled{% endif %}>
+                  <label class="form-check-label" for="motion_enabled">Motion detection</label>
+                </div>
+              </div>
+              <div class="col-12 col-sm-6 d-flex align-items-end">
+                <button type="button" id="privacy-toggle-button"
+                  data-async-action="{{ url_for('set_privacy', camera_id=camera.camera_id) }}"
+                  data-privacy-channel="all"
+                  data-async-payload='{"privacy_enabled":"{{ 'false' if camera.native_privacy_enabled else 'true' }}","privacy_channel":"all"}'
+                  class="btn w-100 {% if camera.native_privacy_enabled %}btn-primary active{% else %}btn-outline-secondary{% endif %}"
+                  aria-pressed="{{ 'true' if camera.native_privacy_enabled else 'false' }}"
+                  {% if not camera.native_privacy_supported %}disabled{% endif %}>Privacy Mask</button>
+              </div>
+              <div class="col-12 col-md-4">
+                <div class="form-label mb-2">Anti-flicker</div>
+                <input type="hidden" id="image_anti_flicker" name="image_anti_flicker" value="{{ camera.native_image_anti_flicker }}" {% if not camera.native_image_anti_flicker_supported %}disabled{% endif %}>
+                <div class="btn-group w-100" role="group" aria-label="Anti flicker mode">
+                  {% for anti_flicker_mode in ['off', '50hz', '60hz'] %}
+                    <button
+                      type="button"
+                      class="btn {% if (camera.native_image_anti_flicker or 'off')|lower == anti_flicker_mode %}btn-primary{% else %}btn-outline-secondary{% endif %}"
+                      data-anti-flicker-button="{{ anti_flicker_mode }}"
+                      data-anti-flicker-submit="true"
+                      {% if not camera.native_image_anti_flicker_supported %}disabled{% endif %}>{{ anti_flicker_mode|upper if anti_flicker_mode != 'off' else 'Off' }}</button>
+                  {% endfor %}
+                </div>
+              </div>
+              <div class="col-12 col-md-4">
+                <label class="form-label" for="image_hflip">Flip</label>
+                <div class="btn-group w-100" role="group" aria-label="Image flip controls">
+                {% if camera.native_image_hflip_supported %}
+                  <input type="hidden" name="image_hflip_present" value="1">
+                {% endif %}
+                  <input class="d-none" id="image_hflip" type="checkbox" name="image_hflip" {% if camera.native_image_hflip %}checked{% endif %} {% if not camera.native_image_hflip_supported %}disabled{% endif %}>
+                  <button
+                    type="button"
+                    class="btn {% if camera.native_image_hflip %}btn-primary{% else %}btn-outline-secondary{% endif %}"
+                    data-toggle-checkbox="image_hflip"
+                        data-toggle-checkbox-submit="true"
+                        aria-pressed="{{ 'true' if camera.native_image_hflip else 'false' }}"
+                    {% if not camera.native_image_hflip_supported %}disabled{% endif %}>Horizontal</button>
+                {% if camera.native_image_vflip_supported %}
+                  <input type="hidden" name="image_vflip_present" value="1">
+                {% endif %}
+                  <input class="d-none" id="image_vflip" type="checkbox" name="image_vflip" {% if camera.native_image_vflip %}checked{% endif %} {% if not camera.native_image_vflip_supported %}disabled{% endif %}>
+                  <button
+                    type="button"
+                    class="btn {% if camera.native_image_vflip %}btn-primary{% else %}btn-outline-secondary{% endif %}"
+                    data-toggle-checkbox="image_vflip"
+                        data-toggle-checkbox-submit="true"
+                        aria-pressed="{{ 'true' if camera.native_image_vflip else 'false' }}"
+                    {% if not camera.native_image_vflip_supported %}disabled{% endif %}>Vertical</button>
+                </div>
+              </div>
+            </div>
+            <div class="small text-body-secondary mt-3">Changes apply immediately.</div>
+          </form>
+
+          <div class="border rounded p-3">
+            <h3 class="h6 mb-3">Action Bar</h3>
+            <div class="d-flex flex-wrap gap-2">
+              <button type="button" class="btn btn-outline-secondary btn-sm" data-async-action="{{ url_for('rescan_one', camera_id=camera.camera_id) }}">Rescan</button>
+              <button type="button" class="btn btn-outline-secondary btn-sm" data-async-action="{{ url_for('refresh_snapshot', camera_id=camera.camera_id) }}">Snapshot</button>
+              <button type="button" class="btn btn-outline-secondary btn-sm" data-async-action="{{ url_for('refresh_api', camera_id=camera.camera_id) }}">Native API</button>
+              <button type="button" class="btn btn-outline-secondary btn-sm" data-async-action="{{ url_for('refresh_onvif', camera_id=camera.camera_id) }}">ONVIF</button>
+            {% for service in camera.native_service_controls %}
+              {% for operation in service.operations %}
+                <button type="button" class="btn btn-outline-secondary btn-sm" data-async-action="{{ url_for('service_action', camera_id=camera.camera_id, service_name=service.service, operation=operation.name) }}">{{ operation.label }} {{ service.label }}</button>
+              {% endfor %}
+            {% endfor %}
+              <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('camera_history', camera_id=camera.camera_id) }}">History</a>
+            {% if camera.snapshot_url %}
+              <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('preview_snapshot', camera_id=camera.camera_id) }}" target="_blank" rel="noreferrer">Snapshot URL</a>
+            {% endif %}
+            {% if camera.web_ui_url %}
+              <a class="btn btn-outline-secondary btn-sm" href="{{ camera.web_ui_url }}" target="_blank" rel="noreferrer">Camera UI</a>
+            {% endif %}
+              <button type="button" class="btn btn-outline-danger btn-sm" data-async-action="{{ url_for('delete_camera', camera_id=camera.camera_id) }}" data-confirm="Remove {{ camera.name }} from the roster? It can reappear if the camera registers again.">Delete</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </article>
+
+    <article class="col-12 col-xl-6">
+      <div class="card h-100">
+        <div class="card-body">
+          <h2 class="card-title h4">Camera Info</h2>
+          <dl class="row mb-0">
+            <dt>Camera ID</dt><dd>{{ camera.camera_id }}</dd>
+            <dt>Hostname</dt><dd>{{ camera.hostname }}</dd>
+            <dt>IP</dt><dd>{{ camera.ip or 'n/a' }}</dd>
+            <dt>Snapshot URL</dt><dd>{{ camera.snapshot_url or 'not configured' }}</dd>
+            <dt>Native API</dt><dd>{{ camera.api_base_url or 'not configured' }}</dd>
+            <dt>API Status</dt><dd data-camera-field="api_status">{{ camera.api_status or 'unknown' }}</dd>
+            <dt>API Device</dt><dd data-camera-field="api_device_name">{{ camera.api_device_name or 'unknown' }}</dd>
+            <dt>API Model</dt><dd data-camera-field="api_device_model">{{ camera.api_device_model or 'unknown' }}</dd>
+            <dt>API Streamer</dt><dd data-camera-field="api_streamer">{{ camera.api_streamer or 'unknown' }}</dd>
+            <dt>API Version</dt><dd data-camera-field="api_version">{{ camera.api_version or 'unknown' }}</dd>
+            <dt>Last API Refresh</dt><dd data-camera-field="api_last_ok_at">{{ camera.api_last_ok_at or 'never' }}</dd>
+            <dt>API Error</dt><dd data-camera-field="api_last_error">{{ camera.api_last_error or 'none' }}</dd>
+            <dt>Last Registration</dt><dd data-camera-field="last_registration_at">{{ camera.last_registration_at or 'unknown' }}</dd>
+            <dt>Last Probe</dt><dd data-camera-field="last_probe_at">{{ camera.last_probe_at or 'never' }}</dd>
+            <dt>Last Snapshot OK</dt><dd data-camera-field="last_snapshot_ok_at">{{ camera.last_snapshot_ok_at or 'never' }}</dd>
+            <dt>Probe Error</dt><dd data-camera-field="last_probe_error">{{ camera.last_probe_error or 'none' }}</dd>
+          </dl>
+        </div>
+      </div>
+    </article>
+
+    <article class="col-12 col-xl-6">
+      <div class="card h-100">
+        <div class="card-body">
+          <h2 class="card-title h4">ONVIF</h2>
+          <dl class="row mb-0">
+            <dt>ONVIF Endpoint</dt><dd>{{ camera.onvif_endpoint or 'not configured' }}</dd>
+            <dt>Manufacturer</dt><dd data-camera-field="onvif_manufacturer">{{ camera.onvif_manufacturer or 'unknown' }}</dd>
+            <dt>Model</dt><dd data-camera-field="onvif_model">{{ camera.onvif_model or 'unknown' }}</dd>
+            <dt>Firmware</dt><dd data-camera-field="onvif_firmware_version">{{ camera.onvif_firmware_version or 'unknown' }}</dd>
+            <dt>Serial Number</dt><dd data-camera-field="onvif_serial_number">{{ camera.onvif_serial_number or 'unknown' }}</dd>
+            <dt>Hardware ID</dt><dd data-camera-field="onvif_hardware_id">{{ camera.onvif_hardware_id or 'unknown' }}</dd>
+            <dt>Last ONVIF Refresh</dt><dd data-camera-field="onvif_last_ok_at">{{ camera.onvif_last_ok_at or 'never' }}</dd>
+            <dt>ONVIF Error</dt><dd data-camera-field="onvif_last_error">{{ camera.onvif_last_error or 'none' }}</dd>
+          </dl>
+        </div>
+      </div>
+    </article>
+  </div>
+
+  <section class="card shadow-sm">
+    <div class="card-body">
+      <h2 class="card-title">Native API Actions</h2>
+      <p>These are the less frequently used controls that don’t need to sit in the preview-side control bar.</p>
+      <div class="row g-4 mb-4">
+        <div class="col-12 col-lg-6">
+          <form action="{{ url_for('record_clip', camera_id=camera.camera_id) }}" method="post" class="border rounded p-3 h-100" data-async-form>
+            <h3>Clip Recording</h3>
+            <div class="row g-3">
+              <div class="col-6">
+                <label class="form-label" for="record_duration_seconds">Duration (s)</label>
+                <input class="form-control" id="record_duration_seconds" type="number" name="record_duration_seconds" min="1" value="10" {% if not camera.native_record_supported %}disabled{% endif %}>
+              </div>
+              <div class="col-6">
+                <label class="form-label" for="record_stream_id">Stream</label>
+                <input class="form-control" id="record_stream_id" type="number" name="record_stream_id" min="0" value="0" {% if not camera.native_record_supported %}disabled{% endif %}>
+              </div>
+              <div class="col-12">
+                <label class="form-label" for="record_path">Output path</label>
+                <input class="form-control" id="record_path" type="text" name="record_path" placeholder="/tmp/clip_YYYYmmdd_HHMMSS.mp4" {% if not camera.native_record_supported %}disabled{% endif %}>
+              </div>
+            </div>
+            <button class="btn btn-outline-primary mt-3" type="submit" {% if not camera.native_record_supported %}disabled{% endif %}>Start Clip Recording</button>
+          </form>
+        </div>
+      </div>
+
+      <h2>Recent Native Actions</h2>
+      <div id="native-action-history">
+      {% if camera.native_action_history %}
+        <div class="table-responsive mb-4">
+          <table class="table table-sm align-middle mb-0">
+            <thead>
+              <tr>
+                <th scope="col">When</th>
+                <th scope="col">Action</th>
+                <th scope="col">Status</th>
+                <th scope="col">Source</th>
+                <th scope="col">Detail</th>
+              </tr>
+            </thead>
+            <tbody id="native-action-history-body">
+            {% for entry in camera.native_action_history %}
+              <tr>
+                <td class="text-nowrap">{{ entry.at or 'just now' }}</td>
+                <td class="text-capitalize">{{ entry.action }}</td>
+                <td>
+                {% if entry.status == 'success' %}
+                  <span class="badge text-bg-success">success</span>
+                {% elif entry.status == 'error' %}
+                  <span class="badge text-bg-danger">error</span>
+                {% else %}
+                  <span class="badge text-bg-secondary">{{ entry.status }}</span>
+                {% endif %}
+                </td>
+                <td class="text-nowrap text-body-secondary">{{ entry.source or 'native_api' }}</td>
+                <td class="text-break">{{ entry.detail or 'n/a' }}</td>
+              </tr>
+            {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <p class="text-body-secondary mb-4" id="native-action-history-empty">No native actions have been issued from the hub for this camera yet.</p>
+      {% endif %}
+      </div>
+
+      <h2>Supported Camera Controls</h2>
+      <p>These fields map to the camera-side native API shim plus the legacy send2 utility endpoint used for notifications and snapshots.</p>
+    {% if camera.identity_conflict_error %}
+      <div class="alert alert-warning" role="alert">{{ camera.identity_conflict_error }}</div>
+    {% endif %}
+    {% if camera.native_controls_error %}
+      <div class="alert alert-warning" role="alert">Could not load live camera config: {{ camera.native_controls_error }}</div>
+    {% endif %}
+      <form action="{{ url_for('apply_supported_config', camera_id=camera.camera_id) }}" method="post" class="mb-4" data-async-form>
+        <fieldset {% if not camera.native_controls_available and not camera.native_send2_available %}disabled{% endif %}>
+          <div class="row g-3">
+            <div class="col-12 col-md-3">
+              <label class="form-label" for="image_brightness">Brightness</label>
+              <input class="form-control" id="image_brightness" type="number" name="image_brightness" min="0" max="255" value="{{ camera.native_image_brightness }}" {% if not camera.native_image_controls_supported %}disabled{% endif %}>
+            </div>
+            <div class="col-12 col-md-3">
+              <label class="form-label" for="image_contrast">Contrast</label>
+              <input class="form-control" id="image_contrast" type="number" name="image_contrast" min="0" max="255" value="{{ camera.native_image_contrast }}" {% if not camera.native_image_controls_supported %}disabled{% endif %}>
+            </div>
+            <div class="col-12 col-md-3">
+              <label class="form-label" for="image_saturation">Saturation</label>
+              <input class="form-control" id="image_saturation" type="number" name="image_saturation" min="0" max="255" value="{{ camera.native_image_saturation }}" {% if not camera.native_image_controls_supported %}disabled{% endif %}>
+            </div>
+            <div class="col-12 col-md-3">
+              <label class="form-label" for="image_sharpness">Sharpness</label>
+              <input class="form-control" id="image_sharpness" type="number" name="image_sharpness" min="0" max="255" value="{{ camera.native_image_sharpness }}" {% if not camera.native_image_controls_supported %}disabled{% endif %}>
+            </div>
+            <div class="col-12 col-md-8">
+              <label class="form-label" for="daynight_force_mode">Day/night force mode</label>
+              <select class="form-select" id="daynight_force_mode" name="daynight_force_mode" {% if not camera.native_daynight_supported %}disabled{% endif %}>
+              {% for mode in camera.native_daynight_modes %}
+                {% set option_value = '' if mode == 'auto' else mode %}
+                <option value="{{ option_value }}" {% if camera.native_daynight_force_mode == option_value %}selected{% endif %}>{{ 'Automatic' if mode == 'auto' else mode|capitalize }}</option>
+              {% endfor %}
+              </select>
+            {% if camera.native_daynight_running_mode %}
+              <div class="form-text">Current runtime mode: {{ camera.native_daynight_running_mode }}</div>
+            {% endif %}
+            </div>
+          {% if camera.native_send2_available or camera.native_send2_error %}
+            <div class="col-12"><hr class="my-1"></div>
+            <div class="col-12 col-lg-6">
+              <label class="form-label" for="send2_motion_sensitivity">Motion sensitivity for notifications</label>
+              <input class="form-control" id="send2_motion_sensitivity" type="number" name="send2_motion_sensitivity" min="1" max="8" value="{{ camera.native_send2_motion_sensitivity }}" {% if not camera.native_send2_available %}disabled{% endif %}>
+            </div>
+            <div class="col-12 col-lg-6">
+              <label class="form-label" for="send2_motion_cooldown">Notification cooldown seconds</label>
+              <input class="form-control" id="send2_motion_cooldown" type="number" name="send2_motion_cooldown" min="1" max="60" value="{{ camera.native_send2_motion_cooldown }}" {% if not camera.native_send2_available %}disabled{% endif %}>
+            </div>
+            <div class="col-12">
+              <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+                <div>
+                  <h3 class="h6 mb-1">Send2 Services</h3>
+                  <p class="text-body-secondary mb-0">Choose which camera-side send2 scripts run on motion, then trigger a test without leaving the hub.</p>
+                </div>
+                <div class="d-flex flex-wrap gap-2">
+                {% if camera.native_send2_overview_url %}
+                  <a class="btn btn-outline-secondary btn-sm" href="{{ camera.native_send2_overview_url }}" target="_blank" rel="noreferrer">Open Native Send2 Page</a>
+                {% endif %}
+                </div>
+              </div>
+            {% if camera.native_send2_error %}
+              <div class="alert alert-warning mb-0">Send2 overview is unavailable right now: {{ camera.native_send2_error }}</div>
+            {% elif camera.native_send2_services %}
+              <div class="table-responsive">
+                <table class="table table-sm align-middle mb-0">
+                  <thead>
+                    <tr>
+                      <th scope="col">Service</th>
+                      <th scope="col">On Motion</th>
+                      <th scope="col">Photo</th>
+                      <th scope="col">Video</th>
+                      <th scope="col">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                {% for service in camera.native_send2_services %}
+                    <tr>
+                      <td>
+                        <div class="fw-semibold">{{ service.label }}</div>
+                        <div class="small text-body-secondary" data-send2-readiness-summary="{{ service.name }}">{{ service.readiness_summary }}</div>
+                      </td>
+                    <td>
+                      <div class="form-check form-switch m-0">
+                        <input type="hidden" name="motion_send2{{ service.name }}_present" value="1">
+                        <input class="form-check-input" type="checkbox" id="motion_send2{{ service.name }}" name="motion_send2{{ service.name }}" data-send2-motion-toggle="true" {% if service.motion_enabled %}checked{% endif %} {% if not camera.native_send2_available %}disabled{% endif %}>
+                      </div>
+                    </td>
+                    <td>
+                      <div class="form-check form-switch m-0">
+                        <input type="hidden" name="send2{{ service.name }}_photo_present" value="1">
+                        <input class="form-check-input" type="checkbox" id="send2{{ service.name }}_photo" name="send2{{ service.name }}_photo" data-send2-media-toggle="true" {% if service.photo_enabled %}checked{% endif %} {% if not camera.native_send2_available %}disabled{% endif %}>
+                      </div>
+                    </td>
+                    <td>
+                      <div class="form-check form-switch m-0">
+                        <input type="hidden" name="send2{{ service.name }}_video_present" value="1">
+                        <input class="form-check-input" type="checkbox" id="send2{{ service.name }}_video" name="send2{{ service.name }}_video" data-send2-media-toggle="true" {% if service.video_enabled %}checked{% endif %} {% if not camera.native_send2_available %}disabled{% endif %}>
+                      </div>
+                    </td>
+                    <td>
+                      <div class="d-flex flex-wrap gap-2">
+                        <button type="button" class="btn btn-outline-secondary btn-sm" data-send2-test-action="{{ url_for('send2_test', camera_id=camera.camera_id, service_name=service.name) }}" data-send2-service-label="{{ service.label }} photo" data-send2-type="photo" data-send2-photo-action="{{ service.name }}" {% if not camera.native_send2_available or not service.photo_enabled %}disabled{% endif %}>Send Photo</button>
+                        <button type="button" class="btn btn-outline-secondary btn-sm" data-send2-test-action="{{ url_for('send2_test', camera_id=camera.camera_id, service_name=service.name) }}" data-send2-service-label="{{ service.label }} video" data-send2-type="video" data-send2-video-action="{{ service.name }}" {% if not camera.native_send2_available or not service.video_enabled %}disabled{% endif %}>Send Video</button>
+                        {% if service.config_url %}
+                          <a class="btn btn-outline-secondary btn-sm" href="{{ service.config_url }}" target="_blank" rel="noreferrer" data-send2-config-action="{{ service.name }}">Configure</a>
+                        {% else %}
+                          <button type="button" class="btn btn-outline-secondary btn-sm" data-send2-config-action="{{ service.name }}" disabled>Configure</button>
+                        {% endif %}
+                      </div>
+                    </td>
+                  </tr>
+                {% endfor %}
+                </table>
+              </div>
+              {% endif %}
+            </div>
+          {% endif %}
+          </div>
+        {% if camera.native_stream_controls %}
+          <div class="row g-3 mt-1">
+          {% for stream in camera.native_stream_controls %}
+            <div class="col-12 col-xl-6">
+              <div class="border rounded p-3 h-100">
+                <h3 class="h6 mb-3">{{ stream.label }}</h3>
+                <div class="row g-3">
+                  <div class="col-12 col-sm-6 d-flex align-items-end">
+                    <div class="form-check mb-2">
+                    {% if stream.enabled_supported %}
+                      <input type="hidden" name="{{ stream.name }}_enabled_present" value="1">
+                    {% endif %}
+                      <input class="form-check-input" id="{{ stream.name }}_enabled" type="checkbox" name="{{ stream.name }}_enabled" {% if stream.enabled %}checked{% endif %} {% if not stream.enabled_supported %}disabled{% endif %}>
+                      <label class="form-check-label" for="{{ stream.name }}_enabled">Stream enabled</label>
+                    </div>
+                  </div>
+                  <div class="col-12 col-sm-6 d-flex align-items-end">
+                    <div class="form-check mb-2">
+                    {% if stream.audio_enabled_supported %}
+                      <input type="hidden" name="{{ stream.name }}_audio_enabled_present" value="1">
+                    {% endif %}
+                      <input class="form-check-input" id="{{ stream.name }}_audio_enabled" type="checkbox" name="{{ stream.name }}_audio_enabled" {% if stream.audio_enabled %}checked{% endif %} {% if not stream.audio_enabled_supported %}disabled{% endif %}>
+                      <label class="form-check-label" for="{{ stream.name }}_audio_enabled">Audio enabled</label>
+                    </div>
+                  </div>
+                  <div class="col-6 col-md-3">
+                    <label class="form-label" for="{{ stream.name }}_width">Width</label>
+                    <input class="form-control" id="{{ stream.name }}_width" type="number" name="{{ stream.name }}_width" value="{{ stream.width }}" {% if not stream.width_supported %}disabled{% endif %}>
+                  </div>
+                  <div class="col-6 col-md-3">
+                    <label class="form-label" for="{{ stream.name }}_height">Height</label>
+                    <input class="form-control" id="{{ stream.name }}_height" type="number" name="{{ stream.name }}_height" value="{{ stream.height }}" {% if not stream.height_supported %}disabled{% endif %}>
+                  </div>
+                  <div class="col-6 col-md-3">
+                    <label class="form-label" for="{{ stream.name }}_fps">FPS</label>
+                    <input class="form-control" id="{{ stream.name }}_fps" type="number" name="{{ stream.name }}_fps" value="{{ stream.fps }}" {% if not stream.fps_supported %}disabled{% endif %}>
+                  </div>
+                  <div class="col-6 col-md-3">
+                    <label class="form-label" for="{{ stream.name }}_bitrate">Bitrate</label>
+                    <input class="form-control" id="{{ stream.name }}_bitrate" type="number" name="{{ stream.name }}_bitrate" value="{{ stream.bitrate }}" {% if not stream.bitrate_supported %}disabled{% endif %}>
+                  </div>
+                  <div class="col-12 col-md-6">
+                    <label class="form-label" for="{{ stream.name }}_format">Format</label>
+                    <input class="form-control" id="{{ stream.name }}_format" type="text" name="{{ stream.name }}_format" value="{{ stream.format }}" {% if not stream.format_supported %}disabled{% endif %}>
+                  </div>
+                  <div class="col-12 col-md-6">
+                    <label class="form-label" for="{{ stream.name }}_mode">Mode</label>
+                    <input class="form-control" id="{{ stream.name }}_mode" type="text" name="{{ stream.name }}_mode" value="{{ stream.mode }}" {% if not stream.mode_supported %}disabled{% endif %}>
+                  </div>
+                  <div class="col-12"><hr class="my-1"></div>
+                  <div class="col-12 col-sm-4 d-flex align-items-end">
+                    <div class="form-check mb-2">
+                    {% if stream.osd_enabled_supported %}
+                      <input type="hidden" name="{{ stream.name }}_osd_enabled_present" value="1">
+                    {% endif %}
+                      <input class="form-check-input" id="{{ stream.name }}_osd_enabled" type="checkbox" name="{{ stream.name }}_osd_enabled" {% if stream.osd_enabled %}checked{% endif %} {% if not stream.osd_enabled_supported %}disabled{% endif %}>
+                      <label class="form-check-label" for="{{ stream.name }}_osd_enabled">Overlay enabled</label>
+                    </div>
+                  </div>
+                  <div class="col-12 col-sm-4 d-flex align-items-end">
+                    <div class="form-check mb-2">
+                    {% if stream.osd_time_enabled_supported %}
+                      <input type="hidden" name="{{ stream.name }}_osd_time_enabled_present" value="1">
+                    {% endif %}
+                      <input class="form-check-input" id="{{ stream.name }}_osd_time_enabled" type="checkbox" name="{{ stream.name }}_osd_time_enabled" {% if stream.osd_time_enabled %}checked{% endif %} {% if not stream.osd_time_enabled_supported %}disabled{% endif %}>
+                      <label class="form-check-label" for="{{ stream.name }}_osd_time_enabled">Time overlay</label>
+                    </div>
+                  </div>
+                  <div class="col-12 col-sm-4 d-flex align-items-end">
+                    <div class="form-check mb-2">
+                    {% if stream.osd_usertext_enabled_supported %}
+                      <input type="hidden" name="{{ stream.name }}_osd_usertext_enabled_present" value="1">
+                    {% endif %}
+                      <input class="form-check-input" id="{{ stream.name }}_osd_usertext_enabled" type="checkbox" name="{{ stream.name }}_osd_usertext_enabled" {% if stream.osd_usertext_enabled %}checked{% endif %} {% if not stream.osd_usertext_enabled_supported %}disabled{% endif %}>
+                      <label class="form-check-label" for="{{ stream.name }}_osd_usertext_enabled">Label overlay</label>
+                    </div>
+                  </div>
+                  <div class="col-12">
+                    <label class="form-label" for="{{ stream.name }}_osd_usertext_format">Label text</label>
+                    <input class="form-control" id="{{ stream.name }}_osd_usertext_format" type="text" name="{{ stream.name }}_osd_usertext_format" value="{{ stream.osd_usertext_format }}" {% if not stream.osd_usertext_format_supported %}disabled{% endif %}>
+                  </div>
+                </div>
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+          {% endif %}
+          <div class="d-flex flex-wrap gap-2 mt-4">
+            <button class="btn btn-primary" type="submit">Apply Supported Settings</button>
+          </div>
+        </fieldset>
+      </form>
+
+      <h2>Native API Config Patch</h2>
+      <p>Send a JSON object to the camera via PATCH /config. The current camera-side shim applies the runtime payload and persists a supported subset.</p>
+      <form action="{{ url_for('patch_config', camera_id=camera.camera_id) }}" method="post" class="mb-4" data-async-form>
+        <div class="mb-3">
+          <label class="form-label" for="config_patch">JSON payload</label>
+          <textarea class="form-control font-monospace" id="config_patch" name="config_patch" rows="8" spellcheck="false">{{ camera.config_patch_example }}</textarea>
+        </div>
+        <button class="btn btn-outline-primary" type="submit">Apply Native Config Patch</button>
+      </form>
+
+      <h2>Send2 Test Output</h2>
+      <p>Last on-demand send2 test launched from the hub. Verbose output is requested so script failures are visible without opening the camera UI.</p>
+      <pre class="form-control font-monospace mb-4" id="send2-test-output" style="min-height: 10rem; white-space: pre-wrap;">No send2 test has been run from the hub yet.</pre>
+
+      <h2>Camera Overrides</h2>
+      <p>These values are stored in the hub YAML and override or supplement auto-registered metadata for this camera.</p>
+      <p class="small text-body-secondary">Deleting a camera removes saved overrides, drops it from the current roster, and tries to clear the retained MQTT registration. A live camera can still re-register itself later.</p>
+      <div class="row g-4">
+        <div class="col-12 col-lg-4">
+          <form action="{{ url_for('camera_detail', camera_id=camera.camera_id) }}" method="post" class="border rounded p-3 h-100">
+            <h3 class="h6 mb-3">General Overrides</h3>
+            <div class="row g-3">
+              <div class="col-12">
+                <label class="form-label" for="override_name">Display name</label>
+                <input class="form-control" id="override_name" type="text" name="name" value="{{ camera.override_name }}">
+              </div>
+              <div class="col-12">
+                <label class="form-label" for="override_ip">IP override</label>
+                <input class="form-control" id="override_ip" type="text" name="ip" value="{{ camera.override_ip }}">
+              </div>
+              <div class="col-12">
+                <label class="form-label" for="override_snapshot_url">Snapshot URL override</label>
+                <input class="form-control" id="override_snapshot_url" type="text" name="snapshot_url" value="{{ camera.override_snapshot_url }}">
+              </div>
+            </div>
+            <button class="btn btn-primary mt-3" type="submit">Save General Overrides</button>
+          </form>
+        </div>
+        <div class="col-12 col-lg-4">
+          <form action="{{ url_for('camera_detail', camera_id=camera.camera_id) }}" method="post" class="border rounded p-3 h-100">
+            <h3 class="h6 mb-3">Native API Overrides</h3>
+            <div class="row g-3">
+              <div class="col-12">
+                <label class="form-label" for="override_api_base_url">Native API base URL override</label>
+                <input class="form-control" id="override_api_base_url" type="text" name="api_base_url" value="{{ camera.override_api_base_url }}">
+              </div>
+              <div class="col-12">
+                <label class="form-label" for="override_api_key">API key override</label>
+                <input class="form-control" id="override_api_key" type="password" name="api_key" value="{{ camera.override_api_key }}" autocomplete="off">
+              </div>
+              <div class="col-12">
+                <label class="form-label" for="override_api_token">Native API bearer token</label>
+                <input class="form-control" id="override_api_token" type="password" name="api_token" value="{{ camera.override_api_token }}" autocomplete="off">
+              </div>
+            </div>
+            <button class="btn btn-primary mt-3" type="submit">Save Native API Overrides</button>
+          </form>
+        </div>
+        <div class="col-12 col-lg-4">
+          <form action="{{ url_for('camera_detail', camera_id=camera.camera_id) }}" method="post" class="border rounded p-3 h-100">
+            <h3 class="h6 mb-3">ONVIF Overrides</h3>
+            <div class="row g-3">
+              <div class="col-12">
+                <label class="form-label" for="override_onvif_endpoint">ONVIF endpoint override</label>
+                <input class="form-control" id="override_onvif_endpoint" type="text" name="onvif_endpoint" value="{{ camera.override_onvif_endpoint }}">
+              </div>
+              <div class="col-12">
+                <label class="form-label" for="override_onvif_username">ONVIF username</label>
+                <input class="form-control" id="override_onvif_username" type="text" name="onvif_username" value="{{ camera.override_onvif_username }}" autocomplete="off">
+              </div>
+              <div class="col-12">
+                <label class="form-label" for="override_onvif_password">ONVIF password</label>
+                <input class="form-control" id="override_onvif_password" type="password" name="onvif_password" value="{{ camera.override_onvif_password }}" autocomplete="off">
+              </div>
+            </div>
+            <button class="btn btn-primary mt-3" type="submit">Save ONVIF Overrides</button>
+          </form>
+        </div>
+      </div>
+      <div class="d-flex flex-wrap gap-2 mt-4">
+        <a class="btn btn-outline-secondary" href="{{ url_for('dashboard') }}">Back to Roster</a>
+      </div>
+    </div>
+  </section>
+
+  <script>
+    (() => {
+      const page = document.querySelector('[data-camera-detail-page]');
+      if (!page) {
+        return;
+      }
+
+      const feedback = document.getElementById('camera-action-feedback');
+      const fallbackText = {
+        status: 'unknown',
+        api_status: 'unknown',
+        api_device_name: 'unknown',
+        api_device_model: 'unknown',
+        api_streamer: 'unknown',
+        api_version: 'unknown',
+        api_last_ok_at: 'never',
+        api_last_error: 'none',
+        onvif_manufacturer: 'unknown',
+        onvif_model: 'unknown',
+        onvif_firmware_version: 'unknown',
+        onvif_serial_number: 'unknown',
+        onvif_hardware_id: 'unknown',
+        onvif_last_ok_at: 'never',
+        onvif_last_error: 'none',
+        last_registration_at: 'unknown',
+        last_probe_at: 'never',
+        last_snapshot_ok_at: 'never',
+        last_probe_error: 'none',
+      };
+      const livePreviewImage = document.querySelector('[data-live-preview-image]');
+      const livePreviewStatus = document.querySelector('[data-live-preview-status]');
+
+      function appendCacheBust(url) {
+        const separator = url.includes('?') ? '&' : '?';
+        return `${url}${separator}ts=${Date.now()}`;
+      }
+
+      function createLivePreviewController(image, statusElement) {
+        if (!image) {
+          return null;
+        }
+
+        const liveSrc = image.dataset.liveSrc || image.getAttribute('src') || '';
+        const snapshotSrc = image.dataset.snapshotSrc || '';
+        const fallbackSrc = image.dataset.fallbackSrc || '';
+        const connectTimeoutMs = 3000;
+        const liveRefreshMs = 15000;
+        const retryDelaysMs = [1000, 2000, 4000, 8000, 15000, 30000];
+        let currentMode = liveSrc ? 'live' : 'snapshot';
+        let retryCount = 0;
+        let retryTimer = null;
+        let connectTimer = null;
+        let liveRefreshTimer = null;
+        let dead = false;
+        let online = image.dataset.previewOnline !== 'false';
+        let snapshotVersion = image.dataset.previewVersion || image.dataset.snapshotVersion || '';
+
+        function setStatus(message) {
+          if (statusElement) {
+            statusElement.textContent = message;
+          }
+        }
+
+        function clearRetryTimer() {
+          if (retryTimer !== null) {
+            window.clearTimeout(retryTimer);
+            retryTimer = null;
+          }
+        }
+
+        function clearConnectTimer() {
+          if (connectTimer !== null) {
+            window.clearTimeout(connectTimer);
+            connectTimer = null;
+          }
+        }
+
+        function clearLiveRefreshTimer() {
+          if (liveRefreshTimer !== null) {
+            window.clearTimeout(liveRefreshTimer);
+            liveRefreshTimer = null;
+          }
+        }
+
+        function clearLiveTimers() {
+          clearRetryTimer();
+          clearConnectTimer();
+          clearLiveRefreshTimer();
+        }
+
+        function scheduleConnectTimeout() {
+          clearConnectTimer();
+          connectTimer = window.setTimeout(() => {
+            connectTimer = null;
+            if (currentMode === 'live') {
+              scheduleReconnect();
+            }
+          }, connectTimeoutMs);
+        }
+
+        function scheduleLiveRefresh() {
+          clearLiveRefreshTimer();
+          liveRefreshTimer = window.setTimeout(() => {
+            liveRefreshTimer = null;
+            if (currentMode !== 'live' || !online) {
+              return;
+            }
+            setStatus('Refreshing live preview...');
+            connectLive(true);
+          }, liveRefreshMs);
+        }
+
+        function showSnapshot(message) {
+          currentMode = 'snapshot';
+          clearConnectTimer();
+          clearLiveRefreshTimer();
+          const versionedSnapshotSrc = snapshotSrc
+            ? `${snapshotSrc}${snapshotSrc.includes('?') ? '&' : '?'}v=${encodeURIComponent(String(snapshotVersion || '0'))}`
+            : '';
+          const targetSrc = versionedSnapshotSrc || snapshotSrc || fallbackSrc;
+          if (targetSrc) {
+            image.src = appendCacheBust(targetSrc);
+          }
+          setStatus(message);
+        }
+
+        function markDead() {
+          dead = true;
+          clearLiveTimers();
+          showSnapshot('Live preview link looks dead. Showing cached snapshot until it recovers.');
+        }
+
+        function connectLive(resetBackoff = false) {
+          if (!liveSrc || !online) {
+            showSnapshot('Live preview unavailable while the camera is offline.');
+            return;
+          }
+          if (resetBackoff) {
+            retryCount = 0;
+            dead = false;
+          }
+          clearLiveTimers();
+          currentMode = 'live';
+          setStatus(retryCount > 0 ? 'Retrying live preview...' : 'Connecting live preview...');
+          image.src = appendCacheBust(liveSrc);
+          scheduleConnectTimeout();
+        }
+
+        function scheduleReconnect() {
+          if (!liveSrc || !online) {
+            showSnapshot('Live preview unavailable while the camera is offline.');
+            return;
+          }
+          if (retryCount >= retryDelaysMs.length) {
+            markDead();
+            return;
+          }
+
+          const delayMs = retryDelaysMs[retryCount];
+          retryCount += 1;
+          dead = false;
+          showSnapshot(`Live preview interrupted. Reconnecting in ${Math.round(delayMs / 1000)}s...`);
+          clearRetryTimer();
+          retryTimer = window.setTimeout(() => {
+            retryTimer = null;
+            connectLive(false);
+          }, delayMs);
+        }
+
+        image.addEventListener('load', () => {
+          if (currentMode !== 'live') {
+            return;
+          }
+          clearConnectTimer();
+          retryCount = 0;
+          dead = false;
+          setStatus('Live preview connected.');
+          scheduleLiveRefresh();
+        });
+
+        image.addEventListener('error', () => {
+          if (currentMode === 'snapshot') {
+            const currentSrc = image.currentSrc || image.src || '';
+            const usingFallback = fallbackSrc && currentSrc.includes(fallbackSrc);
+            if (fallbackSrc && !usingFallback) {
+              image.src = fallbackSrc;
+            }
+            if (retryTimer !== null || connectTimer !== null) {
+              return;
+            }
+            setStatus('Preview image unavailable.');
+            return;
+          }
+          scheduleReconnect();
+        });
+
+        image.addEventListener('abort', () => {
+          if (currentMode === 'live') {
+            scheduleReconnect();
+          }
+        });
+
+        window.addEventListener('error', (event) => {
+          if (event.target === image && currentMode === 'live') {
+            scheduleReconnect();
+          }
+        }, true);
+
+        document.addEventListener('visibilitychange', () => {
+          if (!document.hidden && dead) {
+            connectLive(true);
+          }
+        });
+
+        window.addEventListener('focus', () => {
+          if (dead) {
+            connectLive(true);
+          }
+        });
+
+        if (currentMode === 'live' && online) {
+          if (image.complete && image.naturalWidth > 0) {
+            setStatus('Live preview connected.');
+            scheduleLiveRefresh();
+          } else {
+            setStatus('Connecting live preview...');
+            scheduleConnectTimeout();
+          }
+        }
+
+        return {
+          update(camera) {
+            if (!camera || typeof camera !== 'object') {
+              return;
+            }
+            online = camera.status !== 'offline';
+            image.dataset.previewOnline = online ? 'true' : 'false';
+            if (camera.preview_version) {
+              snapshotVersion = String(camera.preview_version);
+              image.dataset.snapshotVersion = snapshotVersion;
+            }
+            if (!online) {
+              clearLiveTimers();
+              showSnapshot('Live preview unavailable while the camera is offline.');
+              return;
+            }
+            if (dead || (currentMode === 'snapshot' && retryTimer === null)) {
+              connectLive(true);
+            }
+          },
+        };
+      }
+
+      const livePreviewController = createLivePreviewController(livePreviewImage, livePreviewStatus);
+
+      function escapeHtml(value) {
+        return String(value)
+          .replaceAll('&', '&amp;')
+          .replaceAll('<', '&lt;')
+          .replaceAll('>', '&gt;')
+          .replaceAll('"', '&quot;')
+          .replaceAll("'", '&#39;');
+      }
+
+      function showFeedback(message, category) {
+        if (!feedback) {
+          return;
+        }
+        feedback.textContent = message;
+        feedback.className = `alert ${category === 'success' ? 'alert-success' : 'alert-danger'}`;
+      }
+
+      function updateField(name, value) {
+        const element = document.querySelector(`[data-camera-field="${name}"]`);
+        if (!element) {
+          return;
+        }
+        const normalized = value === null || value === undefined || value === '' ? (fallbackText[name] || '') : value;
+        element.textContent = normalized;
+      }
+
+      function setSend2ActionEnabled(serviceName, mediaType, enabled) {
+        const action = document.querySelector(`[data-send2-${mediaType}-action="${serviceName}"]`);
+        if (action) {
+          action.disabled = !enabled;
+        }
+      }
+
+      function updatePrivacy(camera) {
+        const button = document.getElementById('privacy-toggle-button');
+        if (!button) {
+          return;
+        }
+        const enabled = Boolean(camera.native_privacy_enabled);
+        button.setAttribute('data-async-payload', JSON.stringify({
+          privacy_enabled: enabled ? 'false' : 'true',
+          privacy_channel: button.getAttribute('data-privacy-channel') || 'all',
+        }));
+        button.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+        button.disabled = !camera.native_privacy_supported;
+        button.classList.toggle('btn-primary', enabled);
+        button.classList.toggle('active', enabled);
+        button.classList.toggle('btn-outline-secondary', !enabled);
+      }
+
+      function updateDaynight(camera) {
+        const requestedText = document.getElementById('daynight-requested-mode-text');
+        const runningText = document.getElementById('daynight-running-mode-text');
+        const runningInline = document.getElementById('daynight-running-mode-inline');
+        const requestedMode = camera.native_daynight_requested_mode || 'auto';
+        if (requestedText) {
+          requestedText.textContent = `Requested mode: ${requestedMode}`;
+        }
+        document.querySelectorAll('[data-daynight-mode-button]').forEach((button) => {
+          const mode = button.getAttribute('data-daynight-mode-button');
+          const active = mode === requestedMode;
+          button.classList.toggle('btn-primary', active);
+          button.classList.toggle('btn-outline-secondary', !active);
+        });
+        if (runningText) {
+          if (camera.native_daynight_running_mode) {
+            runningText.textContent = `Current runtime mode: ${camera.native_daynight_running_mode}`;
+            runningText.classList.remove('d-none');
+          } else {
+            runningText.textContent = '';
+            runningText.classList.add('d-none');
+          }
+        }
+        if (runningInline) {
+          runningInline.textContent = camera.native_daynight_running_mode || 'unknown';
+        }
+      }
+
+      function updateSupportedConfig(camera) {
+        const assignments = {
+          image_brightness: camera.native_image_brightness,
+          image_contrast: camera.native_image_contrast,
+          image_saturation: camera.native_image_saturation,
+          image_sharpness: camera.native_image_sharpness,
+          image_anti_flicker: camera.native_image_anti_flicker,
+          daynight_force_mode: camera.native_daynight_force_mode,
+          send2_motion_sensitivity: camera.native_send2_motion_sensitivity,
+          send2_motion_cooldown: camera.native_send2_motion_cooldown,
+        };
+
+        Object.entries(assignments).forEach(([id, value]) => {
+          const element = document.getElementById(id);
+          if (element && value !== undefined && value !== null) {
+            element.value = value;
+          }
+        });
+
+        const antiFlickerValue = String(camera.native_image_anti_flicker || 'off').toLowerCase();
+        document.querySelectorAll('[data-anti-flicker-button]').forEach((button) => {
+          const active = button.getAttribute('data-anti-flicker-button') === antiFlickerValue;
+          button.classList.toggle('btn-primary', active);
+          button.classList.toggle('btn-outline-secondary', !active);
+        });
+
+        const motionEnabled = document.getElementById('motion_enabled');
+        if (motionEnabled) {
+          motionEnabled.checked = Boolean(camera.native_motion_enabled);
+        }
+        const imageHflip = document.getElementById('image_hflip');
+        if (imageHflip) {
+          imageHflip.checked = Boolean(camera.native_image_hflip);
+        }
+        const imageHflipButton = document.querySelector('[data-toggle-checkbox="image_hflip"]');
+        if (imageHflipButton) {
+          const active = Boolean(camera.native_image_hflip);
+          imageHflipButton.classList.toggle('btn-primary', active);
+          imageHflipButton.classList.toggle('btn-outline-secondary', !active);
+                imageHflipButton.setAttribute('aria-pressed', active ? 'true' : 'false');
+        }
+
+        const imageVflip = document.getElementById('image_vflip');
+        if (imageVflip) {
+          imageVflip.checked = Boolean(camera.native_image_vflip);
+        }
+        const imageVflipButton = document.querySelector('[data-toggle-checkbox="image_vflip"]');
+        if (imageVflipButton) {
+          const active = Boolean(camera.native_image_vflip);
+          imageVflipButton.classList.toggle('btn-primary', active);
+          imageVflipButton.classList.toggle('btn-outline-secondary', !active);
+                imageVflipButton.setAttribute('aria-pressed', active ? 'true' : 'false');
+        }
+
+        if (Array.isArray(camera.native_stream_controls)) {
+          camera.native_stream_controls.forEach((stream) => {
+            const streamAssignments = {
+              [`${stream.name}_width`]: stream.width,
+              [`${stream.name}_height`]: stream.height,
+              [`${stream.name}_fps`]: stream.fps,
+              [`${stream.name}_bitrate`]: stream.bitrate,
+              [`${stream.name}_format`]: stream.format,
+              [`${stream.name}_mode`]: stream.mode,
+              [`${stream.name}_osd_usertext_format`]: stream.osd_usertext_format,
+            };
+
+            Object.entries(streamAssignments).forEach(([id, value]) => {
+              const element = document.getElementById(id);
+              if (element && value !== undefined && value !== null) {
+                element.value = value;
+              }
+            });
+
+            const enabledElement = document.getElementById(`${stream.name}_enabled`);
+            if (enabledElement) {
+              enabledElement.checked = Boolean(stream.enabled);
+            }
+
+            const audioEnabledElement = document.getElementById(`${stream.name}_audio_enabled`);
+            if (audioEnabledElement) {
+              audioEnabledElement.checked = Boolean(stream.audio_enabled);
+            }
+
+            const osdEnabledElement = document.getElementById(`${stream.name}_osd_enabled`);
+            if (osdEnabledElement) {
+              osdEnabledElement.checked = Boolean(stream.osd_enabled);
+            }
+
+            const osdTimeEnabledElement = document.getElementById(`${stream.name}_osd_time_enabled`);
+            if (osdTimeEnabledElement) {
+              osdTimeEnabledElement.checked = Boolean(stream.osd_time_enabled);
+            }
+
+            const osdUsertextEnabledElement = document.getElementById(`${stream.name}_osd_usertext_enabled`);
+            if (osdUsertextEnabledElement) {
+              osdUsertextEnabledElement.checked = Boolean(stream.osd_usertext_enabled);
+            }
+          });
+        }
+
+        if (Array.isArray(camera.native_send2_services)) {
+          camera.native_send2_services.forEach((service) => {
+            const motionToggle = document.getElementById(`motion_send2${service.name}`);
+            if (motionToggle && 'motion_enabled' in service) {
+              motionToggle.checked = Boolean(service.motion_enabled);
+            }
+
+            const readinessSummary = document.querySelector(`[data-send2-readiness-summary="${service.name}"]`);
+            if (readinessSummary && 'readiness_summary' in service) {
+              readinessSummary.textContent = service.readiness_summary || '';
+            }
+
+            const photoToggle = document.getElementById(`send2${service.name}_photo`);
+            if (photoToggle && 'photo_enabled' in service) {
+              photoToggle.checked = Boolean(service.photo_enabled);
+              setSend2ActionEnabled(service.name, 'photo', Boolean(service.photo_enabled));
+            }
+
+            const videoToggle = document.getElementById(`send2${service.name}_video`);
+            if (videoToggle && 'video_enabled' in service) {
+              videoToggle.checked = Boolean(service.video_enabled);
+              setSend2ActionEnabled(service.name, 'video', Boolean(service.video_enabled));
+            }
+
+            const configAction = document.querySelector(`[data-send2-config-action="${service.name}"]`);
+            if (configAction instanceof HTMLButtonElement && 'config_url' in service) {
+              configAction.disabled = true;
+            }
+          });
+        }
+      }
+
+      function decodeBase64String(value) {
+        try {
+          return window.atob(String(value || ''));
+        } catch (_error) {
+          return '';
+        }
+      }
+
+      function renderSend2TestResult(payload, serviceLabel = '') {
+        const output = document.getElementById('send2-test-output');
+        if (!output) {
+          return;
+        }
+
+        let text = '';
+        const stripAnsi = (value) => String(value || '').replace(/\u001b\[[0-9;]*[A-Za-z]/g, '');
+        if (!payload) {
+          text = 'No response received.';
+        } else if (payload.error) {
+          text = `Error: ${payload.error.message || payload.error.code || payload.error}`;
+        } else if (payload.message && typeof payload.message === 'object') {
+          if (payload.message.output_b64) {
+            text = stripAnsi(decodeBase64String(payload.message.output_b64));
+          } else {
+            text = stripAnsi(payload.message.output || JSON.stringify(payload.message, null, 2));
+          }
+          if (payload.message.status && payload.message.status !== 'success') {
+            text = `[${payload.message.status}] ${text}`;
+          }
+        } else if (typeof payload.message === 'string') {
+          text = stripAnsi(payload.message);
+        } else {
+          text = stripAnsi(JSON.stringify(payload, null, 2));
+        }
+
+        output.textContent = serviceLabel ? `${serviceLabel}\n\n${text || '(no output)'}` : (text || '(no output)');
+      }
+
+      function renderActionBadge(status) {
+        const normalized = String(status || 'unknown').toLowerCase();
+        if (normalized === 'success') {
+          return '<span class="badge text-bg-success">success</span>';
+        }
+        if (normalized === 'error') {
+          return '<span class="badge text-bg-danger">error</span>';
+        }
+        return `<span class="badge text-bg-secondary">${escapeHtml(status || 'unknown')}</span>`;
+      }
+
+      function updateActionHistory(camera) {
+        const container = document.getElementById('native-action-history');
+        if (!container) {
+          return;
+        }
+        const history = Array.isArray(camera.native_action_history) ? camera.native_action_history : [];
+        if (!history.length) {
+          container.innerHTML = '<p class="text-body-secondary mb-4" id="native-action-history-empty">No native actions have been issued from the hub for this camera yet.</p>';
+          return;
+        }
+
+        const rows = history.map((entry) => `
+          <tr>
+            <td class="text-nowrap">${escapeHtml(entry.at || 'just now')}</td>
+            <td class="text-capitalize">${escapeHtml(entry.action || 'unknown')}</td>
+            <td>${renderActionBadge(entry.status)}</td>
+            <td class="text-nowrap text-body-secondary">${escapeHtml(entry.source || 'native_api')}</td>
+            <td class="text-break">${escapeHtml(entry.detail || 'n/a')}</td>
+          </tr>
+        `).join('');
+
+        container.innerHTML = `
+          <div class="table-responsive mb-4">
+            <table class="table table-sm align-middle mb-0">
+              <thead>
+                <tr>
+                  <th scope="col">When</th>
+                  <th scope="col">Action</th>
+                  <th scope="col">Status</th>
+                  <th scope="col">Source</th>
+                  <th scope="col">Detail</th>
+                </tr>
+              </thead>
+              <tbody id="native-action-history-body">${rows}</tbody>
+            </table>
+          </div>
+        `;
+      }
+
+      function updateCameraState(camera) {
+        if (!camera || typeof camera !== 'object') {
+          return;
+        }
+        Object.keys(fallbackText).forEach((name) => {
+          if (Object.prototype.hasOwnProperty.call(camera, name)) {
+            updateField(name, camera[name]);
+          }
+        });
+        if (livePreviewController && ('status' in camera || 'preview_version' in camera)) {
+          livePreviewController.update(camera);
+        }
+        if ('native_privacy_enabled' in camera || 'native_privacy_supported' in camera) {
+          updatePrivacy(camera);
+        }
+        if (
+          'native_daynight_requested_mode' in camera
+          || 'native_daynight_running_mode' in camera
+          || 'native_daynight_enabled' in camera
+        ) {
+          updateDaynight(camera);
+        }
+        if (
+          'native_image_brightness' in camera
+          || 'native_image_contrast' in camera
+          || 'native_image_saturation' in camera
+          || 'native_image_sharpness' in camera
+          || 'native_image_anti_flicker' in camera
+          || 'native_motion_enabled' in camera
+          || 'native_image_hflip' in camera
+          || 'native_image_vflip' in camera
+          || 'native_stream_controls' in camera
+          || 'native_send2_services' in camera
+          || 'native_send2_motion_sensitivity' in camera
+          || 'native_send2_motion_cooldown' in camera
+        ) {
+          updateSupportedConfig(camera);
+        }
+        if ('native_action_history' in camera) {
+          updateActionHistory(camera);
+        }
+      }
+
+      async function submitAsyncForm(form, submitter) {
+        const formData = new FormData(form);
+        const controls = Array.from(form.querySelectorAll('button, input, select, textarea'));
+        controls.forEach((element) => {
+          element.disabled = true;
+        });
+
+        try {
+          const response = await fetch(form.action, {
+            method: form.method || 'POST',
+            body: formData,
+            headers: {
+              Accept: 'application/json',
+              'X-Requested-With': 'fetch',
+            },
+          });
+          const payload = await response.json();
+          showFeedback(payload.message || 'Action completed.', payload.category || (response.ok ? 'success' : 'error'));
+          if (payload.camera) {
+            updateCameraState(payload.camera);
+          }
+          if (!response.ok && !payload.camera) {
+            throw new Error(payload.message || 'Action failed.');
+          }
+        } catch (error) {
+          showFeedback(error instanceof Error ? error.message : 'Action failed.', 'error');
+        } finally {
+          controls.forEach((element) => {
+            if (element.hasAttribute('data-was-disabled')) {
+              element.disabled = true;
+              element.removeAttribute('data-was-disabled');
+              return;
+            }
+            element.disabled = false;
+          });
+          if (submitter && submitter.disabled) {
+            submitter.disabled = false;
+          }
+        }
+      }
+
+      async function submitAsyncAction(button) {
+        const confirmMessage = button.getAttribute('data-confirm');
+        if (confirmMessage && !window.confirm(confirmMessage)) {
+          return;
+        }
+
+        button.disabled = true;
+        try {
+          const formData = new FormData();
+          const rawPayload = button.getAttribute('data-async-payload');
+          if (rawPayload) {
+            const payload = JSON.parse(rawPayload);
+            Object.entries(payload).forEach(([key, value]) => {
+              if (value !== undefined && value !== null) {
+                formData.set(key, String(value));
+              }
+            });
+          }
+          const response = await fetch(button.getAttribute('data-async-action'), {
+            method: 'POST',
+            body: formData,
+            headers: {
+              Accept: 'application/json',
+              'X-Requested-With': 'fetch',
+            },
+          });
+          const payload = await response.json();
+          showFeedback(payload.message || 'Action completed.', payload.category || (response.ok ? 'success' : 'error'));
+          if (payload.camera) {
+            updateCameraState(payload.camera);
+          }
+          if (payload.redirect_url && payload.redirect_url !== window.location.pathname && response.ok) {
+            window.location.assign(payload.redirect_url);
+          }
+        } catch (error) {
+          showFeedback(error instanceof Error ? error.message : 'Action failed.', 'error');
+        } finally {
+          button.disabled = false;
+        }
+      }
+
+      async function submitSend2Test(button) {
+        button.disabled = true;
+        const output = document.getElementById('send2-test-output');
+        const serviceLabel = button.getAttribute('data-send2-service-label') || 'Send2 test';
+        const sendType = button.getAttribute('data-send2-type') || '';
+        if (output) {
+          output.textContent = `${serviceLabel}\n\nRunning...`;
+        }
+
+        try {
+          const formData = new FormData();
+          formData.set('verbose', '1');
+          if (sendType) {
+            formData.set('type', sendType);
+          }
+          const response = await fetch(button.getAttribute('data-send2-test-action'), {
+            method: 'POST',
+            body: formData,
+            headers: {
+              Accept: 'application/json',
+              'X-Requested-With': 'fetch',
+            },
+          });
+          const payload = await response.json();
+          showFeedback(payload.message || 'Send2 test finished.', payload.category || (response.ok ? 'success' : 'error'));
+          if (payload.camera) {
+            updateCameraState(payload.camera);
+          }
+          renderSend2TestResult(payload.send2_test || payload, serviceLabel);
+        } catch (error) {
+          showFeedback(error instanceof Error ? error.message : 'Send2 test failed.', 'error');
+          renderSend2TestResult({ error: { message: error instanceof Error ? error.message : 'Send2 test failed.' } }, serviceLabel);
+        } finally {
+          button.disabled = false;
+        }
+      }
+
+      async function submitQuickControlForm(form, formData) {
+        const response = await fetch(form.action, {
+          method: form.method || 'POST',
+          body: formData,
+          headers: {
+            Accept: 'application/json',
+            'X-Requested-With': 'fetch',
+          },
+        });
+        const payload = await response.json();
+        showFeedback(payload.message || 'Action completed.', payload.category || (response.ok ? 'success' : 'error'));
+        if (payload.camera) {
+          updateCameraState(payload.camera);
+        }
+        if (!response.ok) {
+          throw new Error(payload.message || 'Action failed.');
+        }
+      }
+
+      async function submitCheckboxToggle(button, checkbox, previousChecked) {
+        const form = button.closest('form');
+        if (!form) {
+          return;
+        }
+
+        const formData = new FormData();
+        const checkboxNames = checkbox.name === 'image_hflip' || checkbox.name === 'image_vflip'
+          ? ['image_hflip', 'image_vflip']
+          : [checkbox.name];
+        checkboxNames.forEach((name) => {
+          const currentCheckbox = form.querySelector(`input[name="${name}"]`);
+          const presentField = form.querySelector(`input[name="${name}_present"]`);
+          if (!currentCheckbox) {
+            return;
+          }
+          if (presentField && !presentField.disabled) {
+            formData.set(presentField.name, presentField.value || '1');
+          }
+          if (currentCheckbox.checked) {
+            formData.set(name, 'on');
+          }
+        });
+
+        button.disabled = true;
+        try {
+          await submitQuickControlForm(form, formData);
+        } catch (error) {
+          checkbox.checked = previousChecked;
+          button.classList.toggle('btn-primary', previousChecked);
+          button.classList.toggle('btn-outline-secondary', !previousChecked);
+          button.setAttribute('aria-pressed', previousChecked ? 'true' : 'false');
+          showFeedback(error instanceof Error ? error.message : 'Action failed.', 'error');
+        } finally {
+          button.disabled = false;
+        }
+      }
+
+      async function submitMotionToggle(checkbox, previousChecked) {
+        const form = checkbox.closest('form');
+        if (!form) {
+          return;
+        }
+
+        const formData = new FormData();
+        const presentField = form.querySelector('input[name="motion_enabled_present"]');
+        if (presentField && !presentField.disabled) {
+          formData.set(presentField.name, presentField.value || '1');
+        }
+        if (checkbox.checked) {
+          formData.set(checkbox.name, 'on');
+        }
+
+        checkbox.disabled = true;
+        try {
+          await submitQuickControlForm(form, formData);
+        } catch (error) {
+          checkbox.checked = previousChecked;
+          showFeedback(error instanceof Error ? error.message : 'Action failed.', 'error');
+        } finally {
+          checkbox.disabled = false;
+        }
+      }
+
+      async function submitSend2MotionToggle(checkbox, previousChecked) {
+        const form = checkbox.closest('form');
+        if (!form) {
+          return;
+        }
+
+        const formData = new FormData();
+        const presentField = form.querySelector(`input[name="${checkbox.name}_present"]`);
+        if (presentField && !presentField.disabled) {
+          formData.set(presentField.name, presentField.value || '1');
+        }
+        if (checkbox.checked) {
+          formData.set(checkbox.name, 'on');
+        }
+
+        checkbox.disabled = true;
+        try {
+          await submitQuickControlForm(form, formData);
+        } catch (error) {
+          checkbox.checked = previousChecked;
+          showFeedback(error instanceof Error ? error.message : 'Action failed.', 'error');
+        } finally {
+          checkbox.disabled = false;
+        }
+      }
+
+      async function submitSend2MediaToggle(checkbox, previousChecked) {
+        const form = checkbox.closest('form');
+        if (!form) {
+          return;
+        }
+
+        const match = checkbox.name.match(/^send2(.+)_(photo|video)$/);
+        const serviceName = match ? match[1] : '';
+        const mediaType = match ? match[2] : '';
+
+        const formData = new FormData();
+        const presentField = form.querySelector(`input[name="${checkbox.name}_present"]`);
+        if (presentField && !presentField.disabled) {
+          formData.set(presentField.name, presentField.value || '1');
+        }
+        if (checkbox.checked) {
+          formData.set(checkbox.name, 'on');
+        }
+
+        if (serviceName && mediaType) {
+          setSend2ActionEnabled(serviceName, mediaType, checkbox.checked);
+        }
+
+        checkbox.disabled = true;
+        try {
+          await submitQuickControlForm(form, formData);
+        } catch (error) {
+          checkbox.checked = previousChecked;
+          if (serviceName && mediaType) {
+            setSend2ActionEnabled(serviceName, mediaType, previousChecked);
+          }
+          showFeedback(error instanceof Error ? error.message : 'Action failed.', 'error');
+        } finally {
+          checkbox.disabled = false;
+        }
+      }
+
+      async function submitAntiFlicker(button, previousValue) {
+        const form = button.closest('form');
+        const hiddenInput = document.getElementById('image_anti_flicker');
+        if (!form || !hiddenInput) {
+          return;
+        }
+
+        const formData = new FormData();
+        formData.set(hiddenInput.name, hiddenInput.value);
+
+        button.disabled = true;
+        try {
+          await submitQuickControlForm(form, formData);
+        } catch (error) {
+          hiddenInput.value = previousValue;
+          document.querySelectorAll('[data-anti-flicker-button]').forEach((candidate) => {
+            const active = candidate.getAttribute('data-anti-flicker-button') === previousValue;
+            candidate.classList.toggle('btn-primary', active);
+            candidate.classList.toggle('btn-outline-secondary', !active);
+          });
+          showFeedback(error instanceof Error ? error.message : 'Action failed.', 'error');
+        } finally {
+          button.disabled = false;
+        }
+      }
+
+      document.querySelectorAll('form[data-async-form]').forEach((form) => {
+        Array.from(form.elements).forEach((element) => {
+          if (element.disabled) {
+            element.setAttribute('data-was-disabled', 'true');
+          }
+        });
+
+        form.addEventListener('submit', (event) => {
+          event.preventDefault();
+          submitAsyncForm(form, event.submitter || null);
+        });
+      });
+
+      document.querySelectorAll('[data-async-action]').forEach((button) => {
+        button.addEventListener('click', () => {
+          submitAsyncAction(button);
+        });
+      });
+
+      document.querySelectorAll('[data-anti-flicker-button]').forEach((button) => {
+        button.addEventListener('click', async () => {
+          const hiddenInput = document.getElementById('image_anti_flicker');
+          if (!hiddenInput || hiddenInput.disabled) {
+            return;
+          }
+          const previousValue = hiddenInput.value || 'off';
+          hiddenInput.value = button.getAttribute('data-anti-flicker-button') || 'off';
+          document.querySelectorAll('[data-anti-flicker-button]').forEach((candidate) => {
+            const active = candidate === button;
+            candidate.classList.toggle('btn-primary', active);
+            candidate.classList.toggle('btn-outline-secondary', !active);
+          });
+          if (button.getAttribute('data-anti-flicker-submit') === 'true') {
+            await submitAntiFlicker(button, previousValue);
+          }
+        });
+      });
+
+      const motionEnabled = document.getElementById('motion_enabled');
+      if (motionEnabled) {
+        motionEnabled.addEventListener('change', async () => {
+          const previousChecked = !motionEnabled.checked;
+          await submitMotionToggle(motionEnabled, previousChecked);
+        });
+      }
+
+      document.querySelectorAll('[data-send2-motion-toggle="true"]').forEach((checkbox) => {
+        checkbox.addEventListener('change', async () => {
+          const previousChecked = !checkbox.checked;
+          await submitSend2MotionToggle(checkbox, previousChecked);
+        });
+      });
+
+      document.querySelectorAll('[data-send2-media-toggle="true"]').forEach((checkbox) => {
+        checkbox.addEventListener('change', async () => {
+          const previousChecked = !checkbox.checked;
+          await submitSend2MediaToggle(checkbox, previousChecked);
+        });
+      });
+
+      document.querySelectorAll('[data-toggle-checkbox]').forEach((button) => {
+          button.addEventListener('click', async () => {
+          const checkboxId = button.getAttribute('data-toggle-checkbox');
+          const checkbox = checkboxId ? document.getElementById(checkboxId) : null;
+          if (!checkbox || checkbox.disabled) {
+            return;
+          }
+            const previousChecked = checkbox.checked;
+          checkbox.checked = !checkbox.checked;
+          button.classList.toggle('btn-primary', checkbox.checked);
+          button.classList.toggle('btn-outline-secondary', !checkbox.checked);
+            button.setAttribute('aria-pressed', checkbox.checked ? 'true' : 'false');
+            if (button.getAttribute('data-toggle-checkbox-submit') === 'true') {
+              await submitCheckboxToggle(button, checkbox, previousChecked);
+            }
+        });
+      });
+
+      document.querySelectorAll('[data-send2-test-action]').forEach((button) => {
+        button.addEventListener('click', () => {
+          submitSend2Test(button);
+        });
+      });
+    })();
+  </script>
+{% endblock %}

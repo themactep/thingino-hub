@@ -1,0 +1,159 @@
+{% extends "base.html" %}
+{% block content %}
+  <section class="card shadow-sm">
+    <div class="card-body">
+      <h2 class="h4">Configuration</h2>
+      <p class="text-body-secondary">Saving writes the YAML file used by the container. Save and reload also applies the new settings to the running hub.</p>
+      <form method="post">
+        <section class="mb-4">
+          <h3 class="h5 mb-3">Telegram</h3>
+          <div class="row g-3">
+            <div class="col-12 col-md-6">
+              <label class="form-label">Bot token</label>
+              <input class="form-control" type="password" name="telegram_token" value="{{ config.telegram.token }}">
+            </div>
+            <div class="col-12 col-md-6">
+              <label class="form-label">API URL</label>
+              <input class="form-control" type="text" name="telegram_api_url" value="{{ config.telegram.api_url }}">
+            </div>
+            <div class="col-12 col-md-4">
+              <label class="form-label">Polling timeout</label>
+              <input class="form-control" type="number" name="telegram_polling_timeout" value="{{ config.telegram.polling_timeout }}">
+            </div>
+            <div class="col-12 col-md-4">
+              <label class="form-label">Allowed chat IDs</label>
+              <input class="form-control" type="text" name="telegram_allowed_chat_ids" value="{{ config.telegram.allowed_chat_ids | join(', ') }}">
+            </div>
+            <div class="col-12 col-md-4">
+              <label class="form-label">Allowed usernames</label>
+              <input class="form-control" type="text" name="telegram_allowed_usernames" value="{{ config.telegram.allowed_usernames | join(', ') }}">
+            </div>
+          </div>
+        </section>
+
+        <section class="mb-4">
+          <h3 class="h5 mb-3">MQTT</h3>
+          <div class="row g-3">
+            <div class="col-12 col-md-4">
+              <label class="form-label">Host</label>
+              <input class="form-control" type="text" name="mqtt_host" value="{{ config.mqtt.host }}">
+            </div>
+            <div class="col-12 col-md-2">
+              <label class="form-label">Port</label>
+              <input class="form-control" type="number" name="mqtt_port" value="{{ config.mqtt.port }}">
+            </div>
+            <div class="col-12 col-md-3">
+              <label class="form-label">Username</label>
+              <input class="form-control" type="text" name="mqtt_username" value="{{ config.mqtt.username }}">
+            </div>
+            <div class="col-12 col-md-3">
+              <label class="form-label">Password</label>
+              <input class="form-control" type="password" name="mqtt_password" value="{{ config.mqtt.password }}">
+            </div>
+            <div class="col-12 col-md-3">
+              <label class="form-label">Keepalive</label>
+              <input class="form-control" type="number" name="mqtt_keepalive" value="{{ config.mqtt.keepalive }}">
+            </div>
+            <div class="col-12 col-md-3 d-flex align-items-end">
+              <div class="form-check mb-2">
+                <input class="form-check-input" type="checkbox" name="mqtt_use_tls" id="mqtt_use_tls" {% if config.mqtt.use_tls %}checked{% endif %}>
+                <label class="form-check-label" for="mqtt_use_tls">Use TLS</label>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="mb-4">
+          <h3 class="h5 mb-3">Routing</h3>
+          <div class="row g-3">
+            <div class="col-12 col-lg-4">
+              <label class="form-label">Command topic</label>
+              <input class="form-control" type="text" name="routing_command_topic" value="{{ config.routing.command_topic }}">
+            </div>
+            <div class="col-12 col-lg-4">
+              <label class="form-label">Reply topic</label>
+              <input class="form-control" type="text" name="routing_reply_topic" value="{{ config.routing.reply_topic }}">
+            </div>
+            <div class="col-12 col-lg-4">
+              <label class="form-label">Registration topic</label>
+              <input class="form-control" type="text" name="routing_registration_topic" value="{{ config.routing.registration_topic }}">
+            </div>
+          </div>
+        </section>
+
+        <section class="mb-4">
+          <h3 class="h5 mb-3">Web UI</h3>
+          <div class="row g-3">
+            <div class="col-12 col-md-3">
+              <label class="form-label">UI username</label>
+              <input class="form-control" type="text" name="ui_username" value="{{ config.ui.username }}">
+            </div>
+            <div class="col-12 col-md-3">
+              <label class="form-label">UI password</label>
+              <input class="form-control" type="password" name="ui_password" value="{{ config.ui.password }}">
+            </div>
+            <div class="col-12 col-md-2">
+              <label class="form-label">Registration stale timeout (seconds)</label>
+              <input class="form-control" type="number" min="0" name="ui_registration_stale_after_seconds" value="{{ config.ui.registration_stale_after_seconds }}">
+            </div>
+            <div class="col-12 col-md-2">
+              <label class="form-label">Snapshot heartbeat interval</label>
+              <input class="form-control" type="number" min="0" name="ui_snapshot_heartbeat_interval_seconds" value="{{ config.ui.snapshot_heartbeat_interval_seconds }}">
+            </div>
+            <div class="col-12 col-md-2">
+              <label class="form-label">Snapshot heartbeat timeout</label>
+              <input class="form-control" type="number" min="1" name="ui_snapshot_heartbeat_timeout_seconds" value="{{ config.ui.snapshot_heartbeat_timeout_seconds }}">
+            </div>
+            <div class="col-12 col-md-2">
+              <label class="form-label">Cached snapshot stale after</label>
+              <input class="form-control" type="number" min="0" name="ui_snapshot_cache_stale_after_seconds" value="{{ config.ui.snapshot_cache_stale_after_seconds }}">
+            </div>
+          </div>
+          <p class="small text-body-secondary mt-2">If both auth fields are set, the web UI uses HTTP Basic Auth. Registration staleness is optional fallback logic for retained MQTT registrations. Snapshot heartbeat actively refreshes each camera preview into the local cache and updates the dashboard badge without removing the camera from the roster. When the camera goes offline, recent cached previews remain visible with a muted treatment until the cached snapshot age exceeds the stale threshold, after which the placeholder is shown instead. Set the heartbeat interval to 0 to disable background refresh. Environment variables <code>HUB_UI_USERNAME</code> and <code>HUB_UI_PASSWORD</code> still override the auth values when present.</p>
+        </section>
+
+        <section class="mb-4">
+          <h3 class="h5 mb-3">History</h3>
+          <div class="row g-3">
+            <div class="col-12 col-md-2 d-flex align-items-end">
+              <div class="form-check mb-2">
+                <input class="form-check-input" type="checkbox" name="history_enabled" id="history_enabled" {% if config.history.enabled %}checked{% endif %}>
+                <label class="form-check-label" for="history_enabled">Enable persistent history</label>
+              </div>
+            </div>
+            <div class="col-12 col-md-7">
+              <label class="form-label">SQLite database path</label>
+              <input class="form-control" type="text" name="history_path" value="{{ config.history.path }}">
+            </div>
+            <div class="col-12 col-md-3">
+              <label class="form-label">Recent action rows</label>
+              <input class="form-control" type="number" min="1" name="history_recent_actions_limit" value="{{ config.history.recent_actions_limit }}">
+            </div>
+            <div class="col-12 col-md-3">
+              <label class="form-label">Max action events per camera</label>
+              <input class="form-control" type="number" min="1" name="history_max_action_events_per_camera" value="{{ config.history.max_action_events_per_camera }}">
+            </div>
+            <div class="col-12 col-md-3">
+              <label class="form-label">Max state samples per camera</label>
+              <input class="form-control" type="number" min="1" name="history_max_state_samples_per_camera" value="{{ config.history.max_state_samples_per_camera }}">
+            </div>
+          </div>
+          <p class="small text-body-secondary mt-2">History is written to a local SQLite database after native actions and probe results. Leave the path empty to use the default database next to the hub config file. Per-camera retention caps trim the oldest rows after inserts so the store stays bounded. This store is for analysis and timelines; live camera control does not read desired state from it.</p>
+        </section>
+
+        <section class="mb-4">
+          <h3 class="h5 mb-3">Static Camera Overrides</h3>
+          <p class="small text-body-secondary">Use YAML for optional aliases, snapshot settings, and ONVIF credentials. Auto-registered cameras still appear on the dashboard even if they are not listed here.</p>
+          <p class="small text-body-secondary">Supported per-camera keys include <code>name</code>, <code>ip</code>, <code>snapshot_url</code>, <code>api_key</code>, <code>api_base_url</code>, <code>api_token</code>, <code>onvif_endpoint</code>, <code>onvif_username</code>, and <code>onvif_password</code>.</p>
+          <label class="form-label">Cameras YAML</label>
+          <textarea class="form-control font-monospace" name="cameras_yaml" rows="12">{{ cameras_yaml }}</textarea>
+        </section>
+
+        <div class="d-flex flex-wrap gap-2">
+          <button class="btn btn-primary" type="submit" name="action" value="save">Save</button>
+          <button class="btn btn-outline-secondary" type="submit" name="action" value="save-reload">Save and Reload</button>
+        </div>
+      </form>
+    </div>
+  </section>
+{% endblock %}

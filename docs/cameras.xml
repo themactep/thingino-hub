@@ -1,0 +1,226 @@
+<?xml version='1.0' encoding='utf-8' standalone='yes' ?>
+<map>
+    <boolean name="preference_cam14_recording_sd" value="false" />
+    <string name="preference_cam1_name">36. Catio (XM530ai)</string>
+    <boolean name="preference_cam8_recording_sd" value="false" />
+    <string name="preference_cam6_url">rtsp://rtsp:cam6932@192.168.1.42:554/av_stream/ch0</string>
+    <string name="preference_cam12_hostname">192.168.1.48</string>
+    <string name="cam13_username">YWRtaW4=</string>
+    <string name="preference_cam16_vendor">(ONVIF)</string>
+    <string name="preference_cam14_model">Profile S</string>
+    <string name="cam1_tags"></string>
+    <string name="preference_cam5_model">Generic URL</string>
+    <string name="preference_cam12_vendor">(ONVIF)</string>
+    <float name="cam3_aspect_ratio" value="1.777" />
+    <int name="cam14_protocol" value="3" />
+    <string name="cam13_uid">cfc123b2fb04f32e</string>
+    <string name="preference_cam17_hostname">192.168.1.169</string>
+    <string name="preference_cam18_vendor">(ONVIF)</string>
+    <float name="cam4_aspect_ratio" value="1.777" />
+    <string name="preference_cam14_vendor">(ONVIF)</string>
+    <string name="preference_cam3_name">38. Media Room</string>
+    <int name="cam2_id" value="9650959" />
+    <string name="preference_cam10_vendor">(ONVIF)</string>
+    <boolean name="cam7_md_oc" value="false" />
+    <int name="preference_cam16_port" value="10080" />
+    <int name="cam2_protocol" value="2" />
+    <string name="preference_cam16_name">92. T10 Stock</string>
+    <int name="cam19_id" value="1720329369" />
+    <int name="cam19_protocol" value="3" />
+    <int name="cam7_protocol" value="5" />
+    <string name="preference_cam13_model">Profile S</string>
+    <string name="preference_cam19_hostname">192.168.1.197</string>
+    <int name="cam0_protocol" value="3" />
+    <string name="preference_cam7_hostname">192.168.1.43</string>
+    <int name="cam3_id" value="1851554746" />
+    <string name="cam9_password">Y2FtNjkzMg==</string>
+    <int name="cam14_id" value="64175648" />
+    <int name="preference_cam3_port" value="8899" />
+    <string name="preference_cam5_name">41. Family Room</string>
+    <string name="preference_cam1_vendor">(ONVIF)</string>
+    <string name="cam18_password">OTg3OTg3</string>
+    <string name="preference_cam2_url">rtsp://rtsp:VBXslcBT@192.168.1.37:554/av_stream/ch0</string>
+    <string name="cam6_password">Y2FtNjkzMg==</string>
+    <boolean name="preference_cam9_enabled" value="false" />
+    <string name="preference_cam4_hostname">192.168.1.39</string>
+    <int name="cam12_protocol" value="3" />
+    <int name="preference_cam7_conn_type" value="1" />
+    <string name="cam4_password">Y2FtNjkzMg==</string>
+    <string name="preference_cam14_name">50. test</string>
+    <float name="cam15_aspect_ratio" value="1.777" />
+    <float name="cam17_aspect_ratio" value="1.777" />
+    <string name="preference_cam9_hostname">192.168.1.45</string>
+    <string name="preference_cam19_model">Profile S</string>
+    <int name="cam17_protocol" value="5" />
+    <string name="preference_cam14_hostname">192.168.1.50</string>
+    <int name="preference_cam14_port" value="8899" />
+    <string name="preference_cam2_hostname">192.168.1.173</string>
+    <int name="cam8_id" value="1740886352" />
+    <string name="cam9_uid">cfc123b2fb04f32e</string>
+    <string name="cam11_password">Y2FtNjkzMg==</string>
+    <string name="cam3_tags"></string>
+    <string name="cam11_tags"></string>
+    <int name="cam10_protocol" value="5" />
+    <int name="cam16_protocol" value="3" />
+    <string name="preference_cam18_model">Profile S</string>
+    <string name="preference_cam10_name">46. Basement 1</string>
+    <string name="cam11_username">YWRtaW4=</string>
+    <string name="cam12_uid">6becce1334614ecb</string>
+    <string name="preference_cam15_hostname">192.168.1.51</string>
+    <int name="cam1_id" value="1495968765" />
+    <string name="preference_cam9_vendor">(ONVIF)</string>
+    <string name="preference_cam3_vendor">(ONVIF)</string>
+    <string name="cam6_username">cnRzcA==</string>
+    <string name="preference_cam5_hostname">192.168.1.41</string>
+    <string name="preference_cam1_model">Profile S</string>
+    <int name="cam15_id" value="1784647916" />
+    <string name="cam0_username">YWRtaW4=</string>
+    <int name="cam6_id" value="2124119621" />
+    <int name="preference_cam10_port" value="8899" />
+    <string name="cam12_username">YWRtaW4=</string>
+    <string name="preference_cam4_name">39. Guest Room</string>
+    <string name="cam12_tags"></string>
+    <string name="cam5_tags"></string>
+    <string name="cam18_tags"></string>
+    <boolean name="preference_cam7_recording_sd" value="false" />
+    <string name="cam18_username">YWRtaW4=</string>
+    <string name="cam15_password">Y2FtNjkzMg==</string>
+    <string name="cam12_password">Y2FtNjkzMg==</string>
+    <string name="preference_cam16_model">Profile S</string>
+    <int name="cam10_id" value="1516194876" />
+    <string name="cam0_password">aG9tZXN3ZWV0aG9tZTc4</string>
+    <string name="cam13_tags"></string>
+    <string name="preference_cam1_hostname">192.168.1.36</string>
+    <string name="cam19_tags"></string>
+    <int name="cam7_id" value="1824893419" />
+    <string name="cam3_password">Y2FtNjkzMg==</string>
+    <string name="preference_cam6_vendor">(Generic)</string>
+    <string name="preference_cam5_url">rtsp://rtsp:cam6932@192.168.1.41:554/av_stream/ch0</string>
+    <int name="cam4_protocol" value="3" />
+    <string name="preference_cam13_vendor">(ONVIF)</string>
+    <float name="cam12_aspect_ratio" value="1.777" />
+    <boolean name="preference_cam3_recording_sd" value="false" />
+    <string name="preference_cam0_model">Profile S</string>
+    <int name="preference_cam4_port" value="8899" />
+    <string name="cam15_username">YWRtaW4=</string>
+    <string name="cam3_username">YWRtaW4=</string>
+    <string name="preference_cam15_model">Profile S</string>
+    <string name="preference_cam8_hostname">192.168.1.44</string>
+    <int name="preference_cam15_port" value="8899" />
+    <int name="cam13_protocol" value="3" />
+    <string name="cam10_password">Y2FtNjkzMg==</string>
+    <string name="cam2_tags"></string>
+    <boolean name="cam15_md_oc" value="false" />
+    <string name="preference_cam15_name">51. Front Yard</string>
+    <string name="cam5_password">Y2FtNjkzMg==</string>
+    <string name="cam4_uid">2610df3d85853197</string>
+    <string name="cam11_uid">09d9e44ebd4d835d</string>
+    <string name="cam14_username">YWRtaW4=</string>
+    <int name="preference_cam0_port" value="8899" />
+    <string name="preference_cam18_hostname">192.168.1.175</string>
+    <int name="cam8_protocol" value="5" />
+    <string name="cam10_tags"></string>
+    <int name="cam16_id" value="1003907330" />
+    <string name="preference_cam2_name">37. Crawlspace</string>
+    <int name="cam5_id" value="1516528030" />
+    <string name="preference_cam11_model">Profile S</string>
+    <string name="preference_cam0_name">35. Front Door</string>
+    <int name="cam1_protocol" value="3" />
+    <string name="cam4_tags"></string>
+    <float name="cam8_aspect_ratio" value="1.777" />
+    <int name="cam11_id" value="360508503" />
+    <string name="preference_cam17_model">Profile S</string>
+    <string name="preference_cam11_hostname">192.168.1.47</string>
+    <string name="preference_cam13_name">49. Garage</string>
+    <float name="cam7_aspect_ratio" value="1.777" />
+    <string name="preference_cam8_model">Profile S</string>
+    <int name="preference_cam13_port" value="8899" />
+    <string name="preference_cam16_hostname">192.168.1.92</string>
+    <string name="cam4_username">YWRtaW4=</string>
+    <boolean name="cam4_md_oc" value="false" />
+    <string name="preference_cam9_model">Profile S</string>
+    <string name="preference_cam0_vendor">(ONVIF)</string>
+    <string name="preference_cam9_name">45. Catio</string>
+    <string name="preference_cam2_model">Generic URL</string>
+    <int name="preference_cam9_port" value="8899" />
+    <int name="cam15_protocol" value="3" />
+    <int name="cam3_protocol" value="2" />
+    <string name="preference_cam11_name">47. Basement 2</string>
+    <string name="preference_cam17_name">169. T10 OpenIPC</string>
+    <string name="preference_cam8_vendor">(ONVIF)</string>
+    <float name="cam13_aspect_ratio" value="1.777" />
+    <string name="preference_cam4_vendor">(ONVIF)</string>
+    <int name="preference_cam11_port" value="8899" />
+    <string name="cam9_tags"></string>
+    <string name="preference_cam11_vendor">(ONVIF)</string>
+    <string name="preference_cam15_vendor">(ONVIF)</string>
+    <float name="cam11_aspect_ratio" value="1.777" />
+    <string name="preference_cam19_vendor">(ONVIF)</string>
+    <string name="cam9_username">YWRtaW4=</string>
+    <string name="cam17_tags"></string>
+    <string name="cam14_tags"></string>
+    <string name="cam6_tags"></string>
+    <boolean name="preference_cam4_recording_sd" value="false" />
+    <int name="cam17_id" value="302894533" />
+    <string name="preference_cam12_model">Profile S</string>
+    <string name="preference_cam3_model">Profile S</string>
+    <string name="cam0_tags"></string>
+    <int name="cam0_id" value="1642430365" />
+    <string name="cam10_uid">09d9e44ebd4d835d</string>
+    <boolean name="cam9_md_oc" value="false" />
+    <string name="preference_cam4_model">Profile S</string>
+    <string name="cam17_username">YWRtaW4=</string>
+    <string name="cam13_password">Y2FtNjkzMg==</string>
+    <string name="cam15_tags"></string>
+    <int name="cam5_protocol" value="5" />
+    <int name="cam12_id" value="846441807" />
+    <string name="preference_cam6_name">42. Garage</string>
+    <string name="cam16_tags"></string>
+    <string name="cam3_uid">b83afe0654943bea</string>
+    <int name="preference_cam6_port" value="8899" />
+    <int name="cam9_id" value="955449013" />
+    <string name="preference_cam7_model">Profile S</string>
+    <string name="cam8_tags"></string>
+    <string name="cam1_password">b3BlbmlwYzY5MzI=</string>
+    <string name="preference_cam0_hostname">192.168.1.35</string>
+    <string name="preference_cam6_hostname">192.168.1.140</string>
+    <string name="cam14_password">Y2FtNjkzMg==</string>
+    <string name="preference_cam7_vendor">(ONVIF)</string>
+    <string name="preference_cam5_vendor">(Generic)</string>
+    <string name="preference_cam8_name">44. Driveway W</string>
+    <string name="cam7_tags"></string>
+    <int name="preference_cam19_port" value="8899" />
+    <string name="cam5_username">YWRtaW4=</string>
+    <float name="cam9_aspect_ratio" value="1.777" />
+    <string name="preference_cam19_name">NVT</string>
+    <string name="cam14_uid">0444e6901053f7b0</string>
+    <string name="preference_cam10_model">Profile S</string>
+    <boolean name="cam14_md_oc" value="false" />
+    <int name="preference_cam12_port" value="8899" />
+    <string name="preference_cam10_hostname">192.168.1.46</string>
+    <string name="preference_cam13_hostname">192.168.1.49</string>
+    <string name="cam15_uid">fd4c45aaf7df5396</string>
+    <int name="cam9_protocol" value="0" />
+    <string name="preference_cam18_name">175. OpenIPC ShowMe 1</string>
+    <string name="cam1_username">YWRtaW4=</string>
+    <string name="preference_cam12_name">48. Tool room</string>
+    <int name="cam18_protocol" value="5" />
+    <string name="preference_cam2_vendor">(Generic)</string>
+    <int name="cam6_protocol" value="2" />
+    <int name="cam18_id" value="507765412" />
+    <boolean name="preference_cam15_recording_sd" value="false" />
+    <boolean name="cam8_md_oc" value="false" />
+    <string name="cam10_username">YWRtaW4=</string>
+    <float name="cam14_aspect_ratio" value="1.777" />
+    <string name="preference_cam3_hostname">192.168.1.38</string>
+    <float name="cam10_aspect_ratio" value="1.777" />
+    <string name="preference_cam17_vendor">(ONVIF)</string>
+    <string name="cam17_password">OTg3OTg3</string>
+    <int name="preference_cam7_port" value="443" />
+    <int name="cam13_id" value="529595354" />
+    <string name="preference_cam6_model">Generic URL</string>
+    <int name="cam11_protocol" value="3" />
+    <int name="cam4_id" value="2000294183" />
+    <int name="preference_cam1_port" value="8899" />
+    <string name="preference_cam7_name">43. Driveway E</string>
+</map>

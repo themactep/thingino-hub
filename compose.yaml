@@ -1,0 +1,21 @@
+services:
+  telegrambothub:
+    image: localhost/thinginohub:latest
+    build:
+      context: .
+      dockerfile: Containerfile
+    container_name: thinginothub
+    restart: unless-stopped
+    environment:
+      HUB_CONFIG: /config/config.yaml
+      HUB_STATE_PATH: /data/camera-state.yaml
+      HUB_UI_HOST: 0.0.0.0
+      HUB_UI_PORT: 8080
+      HUB_UI_USERNAME: ${HUB_UI_USERNAME:-}
+      HUB_UI_PASSWORD: ${HUB_UI_PASSWORD:-}
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./app:/app/app:Z
+      - ./config.yaml:/config/config.yaml:Z
+      - ./data:/data:Z

@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+{% block content %}
+  <section class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3 mb-4">
+    <div>
+      <h1 class="h3 mb-1">{{ camera.name }} History</h1>
+      <p class="text-body-secondary mb-0">{{ camera.camera_id }}{% if camera.ip %} / {{ camera.ip }}{% endif %} / {{ camera.status }}</p>
+    </div>
+    <div class="d-flex flex-wrap gap-2">
+      <a class="btn btn-outline-secondary" href="{{ url_for('camera_detail', camera_id=camera.camera_id) }}">Back to Camera</a>
+      <a class="btn btn-outline-secondary" href="{{ url_for('dashboard') }}">Back to Dashboard</a>
+    </div>
+  </section>
+
+  <section class="card shadow-sm">
+    <div class="card-body">
+      <div class="d-flex flex-column flex-md-row justify-content-between gap-3 mb-3">
+        <div>
+          <h2 class="h4 mb-1">Timeline</h2>
+          <p class="text-body-secondary mb-0">Recent native actions and stored state samples from the hub history database.</p>
+        </div>
+        <div class="text-body-secondary small">
+          {% if camera.history_enabled %}
+            SQLite: {{ camera.history_db_path }}
+          {% else %}
+            History database is disabled.
+          {% endif %}
+        </div>
+      </div>
+
+      <p class="small text-body-secondary">API probe samples retain normalized fields for streamer state, network reachability, motion, privacy, day/night mode, and IP so the hub can render charts without re-parsing old blobs.</p>
+
+    {% if camera.charts %}
+      <section class="row g-3 mb-4">
+      {% for chart in camera.charts %}
+        <article class="col-12 col-xl-6">
+          <div class="border rounded p-3 h-100">
+            <div class="d-flex justify-content-between align-items-start gap-3 mb-2">
+              <div>
+                <h3 class="h6 mb-1">{{ chart.title }}</h3>
+                <div class="small text-body-secondary">{{ chart.summary }}</div>
+              </div>
+              <div class="text-end">
+                <div class="small text-body-secondary">Latest</div>
+                <div class="text-capitalize">{{ chart.latest }}</div>
+              </div>
+            </div>
+            <svg viewBox="0 0 {{ chart.width }} {{ chart.height }}" class="w-100" role="img" aria-label="{{ chart.title }}">
+              <rect x="0" y="0" width="{{ chart.width }}" height="{{ chart.height }}" fill="#212529" rx="6"></rect>
+            {% for bar in chart.bars %}
+              <rect x="{{ bar.x }}" y="{{ bar.y }}" width="{{ bar.width }}" height="{{ bar.height }}" fill="{{ bar.fill }}">
+                <title>{{ bar.title }}</title>
+              </rect>
+            {% endfor %}
+            </svg>
+            <div class="d-flex justify-content-between align-items-center gap-3 mt-2 small text-body-secondary">
+              <div>{{ chart.range_start }} to {{ chart.range_end }}</div>
+              <div>{{ chart.sample_count }} samples</div>
+            </div>
+            <div class="d-flex flex-wrap gap-3 mt-2 small">
+            {% for item in chart.legend %}
+              <div class="d-flex align-items-center gap-2 text-body-secondary">
+                <span class="rounded" style="width: 0.75rem; height: 0.75rem; background: {{ item.fill }}; display: inline-block;"></span>
+                <span class="text-capitalize">{{ item.label }}</span>
+              </div>
+            {% endfor %}
+            </div>
+          </div>
+        </article>
+      {% endfor %}
+      </section>
+    {% endif %}
+
+      <section class="row g-3 mb-4">
+        <article class="col-12 col-md-4">
+          <div class="border rounded p-3 h-100">
+            <div class="small text-body-secondary mb-1">Shown Rows</div>
+            <div class="h4 mb-0">{{ camera.timeline | length }}</div>
+            <div class="small text-body-secondary">{{ camera.timeline_action_count }} actions / {{ camera.timeline_state_count }} state samples</div>
+          </div>
+        </article>
+        <article class="col-12 col-md-4">
+          <div class="border rounded p-3 h-100">
+            <div class="small text-body-secondary mb-1">Latest API Probe</div>
+            {% if camera.latest_api_probe %}
+              <div class="h6 mb-1 text-capitalize">{{ camera.latest_api_probe.status }}</div>
+              <div class="small text-body-secondary">{{ camera.latest_api_probe.at }}</div>
+            {% else %}
+              <div class="small text-body-secondary">No API probe sample</div>
+            {% endif %}
+          </div>
+        </article>
+        <article class="col-12 col-md-4">
+          <div class="border rounded p-3 h-100">
+            <div class="small text-body-secondary mb-1">Latest Snapshot Probe</div>
+            {% if camera.latest_snapshot_probe %}
+              <div class="h6 mb-1 text-capitalize">{{ camera.latest_snapshot_probe.status }}</div>
+              <div class="small text-body-secondary">{{ camera.latest_snapshot_probe.at }}</div>
+            {% else %}
+              <div class="small text-body-secondary">No snapshot probe sample</div>
+            {% endif %}
+          </div>
+        </article>
+      </section>
+
+      <form method="get" class="row g-3 align-items-end mb-4">
+        <div class="col-12 col-md-3">
+          <label class="form-label" for="kind">Kind</label>
+          <select class="form-select" id="kind" name="kind">
+            <option value="all" {% if camera.history_kind_filter == 'all' %}selected{% endif %}>All</option>
+            <option value="action" {% if camera.history_kind_filter == 'action' %}selected{% endif %}>Actions only</option>
+            <option value="state" {% if camera.history_kind_filter == 'state' %}selected{% endif %}>State samples only</option>
+          </select>
+        </div>
+        <div class="col-12 col-md-3">
+          <label class="form-label" for="sample_type">State sample type</label>
+          <select class="form-select" id="sample_type" name="sample_type">
+            {% for sample_type in camera.available_sample_types %}
+              <option value="{{ sample_type }}" {% if camera.history_sample_type_filter == sample_type %}selected{% endif %}>{{ 'All state samples' if sample_type == 'all' else sample_type.replace('_', ' ') }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-12 col-md-2">
+          <label class="form-label" for="limit">Limit</label>
+          <input class="form-control" id="limit" type="number" name="limit" min="1" max="500" value="{{ camera.history_limit }}">
+        </div>
+        <div class="col-12 col-md-4 d-flex gap-2">
+          <button class="btn btn-primary" type="submit">Apply Filters</button>
+          <a class="btn btn-outline-secondary" href="{{ url_for('camera_history', camera_id=camera.camera_id) }}">Reset</a>
+        </div>
+      </form>
+
+    {% if camera.timeline %}
+      <div class="table-responsive">
+        <table class="table table-sm align-middle mb-0">
+          <thead>
+            <tr>
+              <th scope="col">When</th>
+              <th scope="col">Kind</th>
+              <th scope="col">Name</th>
+              <th scope="col">Status</th>
+              <th scope="col">Source</th>
+              <th scope="col">Detail</th>
+            </tr>
+          </thead>
+          <tbody>
+          {% for entry in camera.timeline %}
+            <tr>
+              <td class="text-nowrap">{{ entry.at or 'unknown' }}</td>
+              <td class="text-capitalize">{{ entry.kind }}</td>
+              <td class="text-capitalize">{{ entry.name }}</td>
+              <td>
+              {% if entry.status == 'success' %}
+                <span class="badge text-bg-success">success</span>
+              {% elif entry.status == 'error' %}
+                <span class="badge text-bg-danger">error</span>
+              {% else %}
+                <span class="badge text-bg-secondary">{{ entry.status }}</span>
+              {% endif %}
+              </td>
+              <td class="text-nowrap text-body-secondary">{{ entry.source }}</td>
+              <td class="text-break">{{ entry.detail }}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="text-body-secondary mb-0">No stored history exists for this camera yet.</p>
+    {% endif %}
+    </div>
+  </section>
+{% endblock %}

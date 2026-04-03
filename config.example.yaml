@@ -1,0 +1,53 @@
+telegram:
+  token: "123456789:replace-me"
+  api_url: "https://api.telegram.org"
+  polling_timeout: 30
+  allowed_chat_ids: []
+  allowed_usernames: []
+
+mqtt:
+  host: "192.168.1.10"
+  port: 1883
+  username: ""
+  password: ""
+  keepalive: 60
+  use_tls: false
+
+routing:
+  command_topic: "thingino/cam/{camera_id}/cmd"
+  reply_topic: "thingino/cam/+/reply"
+  registration_topic: "thingino/cam/+/hello"
+
+ui:
+  username: ""
+  password: ""
+  registration_stale_after_seconds: 0
+  snapshot_heartbeat_interval_seconds: 60
+  snapshot_heartbeat_timeout_seconds: 5
+  snapshot_cache_stale_after_seconds: 3600
+
+history:
+  enabled: true
+  path: ""
+  recent_actions_limit: 20
+  max_action_events_per_camera: 1000
+  max_state_samples_per_camera: 5000
+
+cameras:
+  - id: "aabbccddeeff"
+    name: "front-door"
+    api_base_url: "http://192.168.1.50/api/v1"
+    api_token: ""
+    snapshot_url: "http://192.168.1.50/x/ch0.jpg"
+    api_key: ""
+    onvif_endpoint: "http://192.168.1.50/onvif/device_service"
+    onvif_username: "admin"
+    onvif_password: ""
+  - id: "112233445566"
+    name: "garage"
+    api_base_url: ""
+    api_token: ""
+    onvif_username: "admin"
+    onvif_password: ""
+    snapshot_url: ""
+    api_key: ""
