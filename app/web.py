@@ -130,6 +130,12 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
 
         return payload
 
+    def daynight_delta_payload(mode: str) -> dict[str, Any]:
+        normalized_mode = str(mode or "").strip().lower() or "auto"
+        return {
+            "native_daynight_requested_mode": normalized_mode,
+        }
+
     def merge_flip_state(camera_id: str, native_payload: dict[str, Any]) -> dict[str, Any]:
         image_payload = native_payload.get("image")
         if not isinstance(image_payload, dict):
@@ -627,19 +633,19 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
     def set_daynight(camera_id: str) -> Response:
         mode = str(request.form.get("daynight_mode") or "").strip().lower() or "auto"
         try:
-            result = hub.set_camera_daynight_mode(camera_id, mode=mode)
+            result = hub.set_camera_daynight_mode(camera_id, mode=mode, refresh_after=False)
             return action_response(
                 f"Day/night mode set to {mode} for {camera_id}: {result.get('status', 'ok')}",
                 "success",
                 url_for("camera_detail", camera_id=camera_id),
-                camera_id=camera_id,
+                camera_payload=daynight_delta_payload(mode),
             )
         except Exception as error:
             return action_response(
                 f"Day/night update failed for {camera_id}: {error}",
                 "error",
                 url_for("camera_detail", camera_id=camera_id),
-                camera_id=camera_id,
+                camera_payload={},
                 status_code=500,
             )
 

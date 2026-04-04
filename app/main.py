@@ -747,6 +747,8 @@ class Hub:
                 force_mode = str(daynight.get("force_mode") or "").strip()
                 values["native_daynight_force_mode"] = force_mode
                 values["native_daynight_requested_mode"] = force_mode or "auto"
+            if "target_mode" in daynight:
+                values["native_daynight_requested_mode"] = str(daynight.get("target_mode") or "auto").strip() or "auto"
 
         if not values:
             return
@@ -953,7 +955,7 @@ class Hub:
         self.refresh_camera_api_details(resolved)
         return result
 
-    def set_camera_daynight_mode(self, camera_id: str, mode: str) -> dict[str, Any]:
+    def set_camera_daynight_mode(self, camera_id: str, mode: str, *, refresh_after: bool = True) -> dict[str, Any]:
         resolved = self._resolve_camera_id(camera_id) or camera_id.strip().lower()
         with self.state_lock:
             camera = self.cameras.get(resolved)
@@ -971,7 +973,14 @@ class Hub:
             raise
 
         self._record_native_action(resolved, "daynight", "success", normalized_mode)
-        self.refresh_camera_api_details(resolved)
+        if refresh_after:
+            self.refresh_camera_api_details(resolved)
+        else:
+            self._record_optimistic_supported_controls(
+                resolved,
+                {"daynight": {"target_mode": normalized_mode}},
+            )
+            self._schedule_api_refresh(resolved)
         return result
 
     def record_camera_clip(
