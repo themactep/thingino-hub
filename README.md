@@ -207,6 +207,9 @@ Notes:
 - `history.path` overrides the SQLite database path; when empty, the hub uses a default database next to `config.yaml`
 - `history.recent_actions_limit` controls how many recent database-backed native actions are shown on each camera detail page
 - ONVIF device info refreshes on startup, on registration refresh, and on demand from the camera detail page; by default the hub tries `http://<camera-ip>/onvif/device_service` when no explicit endpoint is configured
+- camera detail pages render from cached supported-controls data first, then hydrate native API and ONVIF details in the background so the page stays responsive while fresher state arrives
+- quick controls and camera-page refresh buttons use narrow JSON responses or queued acknowledgements rather than full camera payloads where possible
+- camera-page action feedback is shown as a floating toast instead of shifting the page layout
 
 If camera-side revoke succeeds, the camera stays unregistered until it is explicitly registered again. If the revoke command does not reach the camera, it can still reappear later after publishing a fresh registration heartbeat.
 
@@ -230,6 +233,23 @@ The hub can also keep a local SQLite history database for native API activity.
 
 This database is used for timelines and later analysis. It is not a source of
 truth for live camera control.
+
+## Testing
+
+The hub now has a small unittest-based regression module for the optimized camera-page routes.
+
+Run it with:
+
+```sh
+python -m unittest -v tests.test_web_routes
+```
+
+Current coverage focuses on route behavior that should stay small and non-blocking:
+
+- camera detail hydration payloads
+- full cached camera payload fetches
+- minimal quick-action deltas for day/night and privacy
+- queued refresh acknowledgements without full camera blobs
 
 ### Web UI Authentication
 
