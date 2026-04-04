@@ -1,4 +1,5 @@
 import copy
+import http.client
 import json
 import logging
 import mimetypes
@@ -2487,7 +2488,7 @@ class Hub:
             try:
                 photo, filename = self._fetch_snapshot_via_api(camera)
                 return photo, f"{camera.camera_id}{Path(filename).suffix or '.jpg'}"
-            except CameraApiError as error:
+            except (CameraApiError, urllib.error.URLError, http.client.IncompleteRead) as error:
                 self._record_api_result(camera.camera_id, None, str(error))
                 if not self._camera_snapshot_url(camera):
                     raise
