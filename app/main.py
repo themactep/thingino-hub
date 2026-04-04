@@ -1571,18 +1571,18 @@ class Hub:
         except Exception as error:
             defaults["native_controls_error"] = self._normalize_native_api_error(error)
 
-        prudynt_config = ((config_payload.get("backend") or {}).get("prudynt") or {})
+        backend_config = config_payload.get("backend") or {}
+        prudynt_config = (backend_config.get("raw") or backend_config.get("prudynt") or {})
         image = prudynt_config.get("image") or {}
         motion = prudynt_config.get("motion") or {}
         daynight = prudynt_config.get("daynight") or {}
         state_daynight = (state_payload.get("daynight") or {})
         state_privacy = (state_payload.get("privacy") or {})
-        daynight_caps = capabilities.get("daynight") or {}
         config_caps = capabilities.get("config") or {}
         control_caps = config_caps.get("controls") or {}
-        image_caps = control_caps.get("image") or {}
-        motion_caps = control_caps.get("motion") or {}
-        daynight_control_caps = control_caps.get("daynight") or {}
+        image_caps = capabilities.get("image") or control_caps.get("image") or {}
+        motion_caps = capabilities.get("motion") or control_caps.get("motion") or {}
+        daynight_caps = capabilities.get("daynight") or control_caps.get("daynight") or {}
         privacy_caps = capabilities.get("privacy") or {}
         services_caps = capabilities.get("services") or {}
         streaming_service_caps = (services_caps.get("streaming") or {})
@@ -1705,8 +1705,8 @@ class Hub:
                     "native_controls_available": True,
                     "native_service_controls": service_controls,
                     "native_motion_supported": bool(motion_caps.get("enabled")),
-                    "native_daynight_supported": bool(daynight_caps.get("enabled")) and bool(daynight_control_caps.get("enabled")),
-                    "native_daynight_action_supported": bool(daynight_caps.get("set_mode")),
+                    "native_daynight_supported": bool(daynight_caps.get("enabled")),
+                    "native_daynight_action_supported": bool(daynight_caps.get("force_mode")) or bool(daynight_caps.get("modes")),
                     "native_image_controls_supported": bool(image_caps),
                     "native_image_anti_flicker_supported": bool(image_caps.get("anti_flicker")),
                     "native_image_hflip_supported": "hflip" in image,
