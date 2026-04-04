@@ -1,5 +1,6 @@
 import json
 import mimetypes
+import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -115,7 +116,10 @@ class CameraApiClient:
 
         request = urllib.request.Request(url, data=data, headers=headers, method=method)
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            open_kwargs: dict[str, Any] = {"timeout": self.timeout}
+            if urllib.parse.urlsplit(url).scheme == "https":
+                open_kwargs["context"] = ssl._create_unverified_context()
+            with urllib.request.urlopen(request, **open_kwargs) as response:
                 return response.read(), response.headers
         except urllib.error.HTTPError as error:
             body = error.read().decode("utf-8", errors="replace").strip()
