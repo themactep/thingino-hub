@@ -337,6 +337,35 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
         camera.update(hub.get_camera_supported_controls_for_ui(camera_id))
         return render_template("camera_detail.html", camera=camera)
 
+    @app.post("/camera/<camera_id>/hydrate")
+    def hydrate_camera_detail(camera_id: str) -> Response:
+        try:
+            api_refresh = hub.queue_camera_api_refresh(camera_id)
+        except Exception as error:
+            api_refresh = f"error: {error}"
+
+        try:
+            onvif_refresh = hub.queue_camera_onvif_refresh(camera_id)
+        except Exception as error:
+            onvif_refresh = f"error: {error}"
+
+        payload = {
+            "ok": True,
+            "camera": camera_detail_payload(camera_id),
+            "refreshes": {
+                "api": api_refresh,
+                "onvif": onvif_refresh,
+            },
+        }
+        return jsonify(payload)
+
+    @app.get("/camera/<camera_id>/payload")
+    def camera_detail_state(camera_id: str) -> Response:
+        return jsonify({
+            "ok": True,
+            "camera": camera_detail_payload(camera_id),
+        })
+
     @app.get("/camera/<camera_id>/history")
     def camera_history(camera_id: str) -> str:
         limit = _optional_int_value(request.args.get("limit"), "history.limit")
@@ -397,20 +426,20 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
             total, published = hub.rescan_cameras(camera_id)
             if published == total:
                 return action_response(
-                    f"Requested metadata refresh from {camera_id}.",
+                    "Metadata refresh requested.",
                     "success",
                     url_for("camera_detail", camera_id=camera_id),
                 )
             else:
                 return action_response(
-                    f"Metadata refresh request failed for {camera_id}.",
+                    "Metadata refresh request failed.",
                     "error",
                     url_for("camera_detail", camera_id=camera_id),
                     status_code=400,
                 )
         except Exception as error:
             return action_response(
-                f"Rescan failed for {camera_id}: {error}",
+                f"Metadata refresh failed: {error}",
                 "error",
                 url_for("camera_detail", camera_id=camera_id),
                 status_code=500,
@@ -422,19 +451,19 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
             result = hub.queue_snapshot_refresh(camera_id)
             if result == "scheduled":
                 return action_response(
-                    f"Snapshot refresh queued for {camera_id}.",
+                    "Snapshot refresh queued.",
                     "success",
                     url_for("camera_detail", camera_id=camera_id),
                 )
             else:
                 return action_response(
-                    f"Snapshot refresh is already running for {camera_id}.",
+                    "Snapshot refresh is already running.",
                     "success",
                     url_for("camera_detail", camera_id=camera_id),
                 )
         except Exception as error:
             return action_response(
-                f"Snapshot refresh failed for {camera_id}: {error}",
+                f"Snapshot refresh failed: {error}",
                 "error",
                 url_for("camera_detail", camera_id=camera_id),
                 status_code=500,
@@ -446,19 +475,19 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
             result = hub.queue_camera_onvif_refresh(camera_id)
             if result == "scheduled":
                 return action_response(
-                    f"ONVIF refresh queued for {camera_id}.",
+                    "ONVIF refresh queued.",
                     "success",
                     url_for("camera_detail", camera_id=camera_id),
                 )
             else:
                 return action_response(
-                    f"ONVIF refresh is already running for {camera_id}.",
+                    "ONVIF refresh is already running.",
                     "success",
                     url_for("camera_detail", camera_id=camera_id),
                 )
         except Exception as error:
             return action_response(
-                f"ONVIF refresh failed for {camera_id}: {error}",
+                f"ONVIF refresh failed: {error}",
                 "error",
                 url_for("camera_detail", camera_id=camera_id),
                 status_code=500,
@@ -470,19 +499,19 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
             result = hub.queue_camera_api_refresh(camera_id)
             if result == "scheduled":
                 return action_response(
-                    f"Native API refresh queued for {camera_id}.",
+                    "Native API refresh queued.",
                     "success",
                     url_for("camera_detail", camera_id=camera_id),
                 )
             else:
                 return action_response(
-                    f"Native API refresh is already running for {camera_id}.",
+                    "Native API refresh is already running.",
                     "success",
                     url_for("camera_detail", camera_id=camera_id),
                 )
         except Exception as error:
             return action_response(
-                f"Native API refresh failed for {camera_id}: {error}",
+                f"Native API refresh failed: {error}",
                 "error",
                 url_for("camera_detail", camera_id=camera_id),
                 status_code=500,
@@ -493,14 +522,14 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
         try:
             result = hub.control_camera_service(camera_id, service_name, operation, refresh_after=False)
             return action_response(
-                f"{service_name.replace('_', ' ').title()} service {operation} accepted for {camera_id}: {result.get('status', 'ok')}",
+                f"{service_name.replace('_', ' ').title()} {operation} requested.",
                 "success",
                 url_for("camera_detail", camera_id=camera_id),
                 camera_payload=action_history_delta_payload(camera_id),
             )
         except Exception as error:
             return action_response(
-                f"{service_name.replace('_', ' ').title()} service {operation} failed for {camera_id}: {error}",
+                f"{service_name.replace('_', ' ').title()} {operation} failed: {error}",
                 "error",
                 url_for("camera_detail", camera_id=camera_id),
                 camera_payload={},
@@ -524,14 +553,14 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
         try:
             result = hub.restart_camera_streaming_service(camera_id)
             return action_response(
-                f"Streaming service restart accepted for {camera_id}: {result.get('status', 'ok')}",
+                "Streaming restart requested.",
                 "success",
                 url_for("camera_detail", camera_id=camera_id),
                 camera_id=camera_id,
             )
         except Exception as error:
             return action_response(
-                f"Streaming service restart failed for {camera_id}: {error}",
+                f"Streaming restart failed: {error}",
                 "error",
                 url_for("camera_detail", camera_id=camera_id),
                 camera_id=camera_id,
@@ -573,7 +602,7 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
         try:
             result = hub.patch_camera_config(camera_id, payload, refresh_after=False)
             return action_response(
-                f"Native config patch accepted for {camera_id}: {result.get('status', 'ok')}",
+                "Config patch applied.",
                 "success",
                 url_for("camera_detail", camera_id=camera_id),
                 camera_payload=merge_camera_payloads(
@@ -583,7 +612,7 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
             )
         except Exception as error:
             return action_response(
-                f"Native config patch failed for {camera_id}: {error}",
+                f"Config patch failed: {error}",
                 "error",
                 url_for("camera_detail", camera_id=camera_id),
                 camera_payload={},
@@ -605,7 +634,7 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
             if not results:
                 raise ValueError("No supported settings were provided")
             return action_response(
-                f"Camera settings applied for {camera_id}: {'; '.join(results)}",
+                f"Settings applied: {'; '.join(results)}",
                 "success",
                 url_for("camera_detail", camera_id=camera_id),
                 camera_payload=merge_camera_payloads(
@@ -615,7 +644,7 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
             )
         except Exception as error:
             return action_response(
-                f"Native camera settings update failed for {camera_id}: {error}",
+                f"Settings update failed: {error}",
                 "error",
                 url_for("camera_detail", camera_id=camera_id),
                 camera_payload={},
@@ -669,14 +698,14 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
             result = hub.set_camera_privacy(camera_id, enabled=enabled, channel=channel, refresh_after=False)
             state = "enabled" if enabled else "disabled"
             return action_response(
-                f"Privacy {state} for {camera_id}: {result.get('status', 'ok')}",
+                f"Privacy {state}.",
                 "success",
                 url_for("camera_detail", camera_id=camera_id),
                 camera_payload=privacy_delta_payload(enabled),
             )
         except Exception as error:
             return action_response(
-                f"Privacy update failed for {camera_id}: {error}",
+                f"Privacy update failed: {error}",
                 "error",
                 url_for("camera_detail", camera_id=camera_id),
                 camera_payload={},
@@ -689,14 +718,14 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
         try:
             result = hub.set_camera_daynight_mode(camera_id, mode=mode, refresh_after=False)
             return action_response(
-                f"Day/night mode set to {mode} for {camera_id}: {result.get('status', 'ok')}",
+                f"Day/night set to {mode}.",
                 "success",
                 url_for("camera_detail", camera_id=camera_id),
                 camera_payload=daynight_delta_payload(mode),
             )
         except Exception as error:
             return action_response(
-                f"Day/night update failed for {camera_id}: {error}",
+                f"Day/night update failed: {error}",
                 "error",
                 url_for("camera_detail", camera_id=camera_id),
                 camera_payload={},
@@ -717,14 +746,14 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
             clip_path = ((result.get("result") or {}).get("path") or "") if isinstance(result, dict) else ""
             detail = f" -> {clip_path}" if clip_path else ""
             return action_response(
-                f"Clip recording accepted for {camera_id}{detail}",
+                f"Clip recording requested{detail}",
                 "success",
                 url_for("camera_detail", camera_id=camera_id),
                 camera_payload=action_history_delta_payload(camera_id),
             )
         except Exception as error:
             return action_response(
-                f"Clip recording failed for {camera_id}: {error}",
+                f"Clip recording failed: {error}",
                 "error",
                 url_for("camera_detail", camera_id=camera_id),
                 camera_payload={},

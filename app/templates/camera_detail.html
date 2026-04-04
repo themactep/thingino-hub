@@ -22,7 +22,7 @@
     }
   </style>
 
-  <div data-camera-detail-page data-camera-id="{{ camera.camera_id }}">
+  <div data-camera-detail-page data-camera-id="{{ camera.camera_id }}" data-hydrate-url="{{ url_for('hydrate_camera_detail', camera_id=camera.camera_id) }}" data-payload-url="{{ url_for('camera_detail_state', camera_id=camera.camera_id) }}">
     <div id="camera-action-feedback" class="alert d-none" role="status" aria-live="polite"></div>
   </div>
 
@@ -608,6 +608,7 @@
 
       const feedback = document.getElementById('camera-action-feedback');
       let feedbackTimer = null;
+      let hydratePollTimer = null;
       const fallbackText = {
         status: 'unknown',
         api_status: 'unknown',
@@ -631,6 +632,8 @@
       };
       const livePreviewImage = document.querySelector('[data-live-preview-image]');
       const livePreviewStatus = document.querySelector('[data-live-preview-status]');
+      const hydrateUrl = page.dataset.hydrateUrl || '';
+      const payloadUrl = page.dataset.payloadUrl || '';
 
       function appendCacheBust(url) {
         const separator = url.includes('?') ? '&' : '?';
@@ -880,6 +883,57 @@
           feedbackTimer = null;
         }, 3200);
         feedback.classList.remove('d-none');
+      }
+
+      async function fetchJson(url, options = {}) {
+        const response = await fetch(url, {
+          ...options,
+          headers: {
+            Accept: 'application/json',
+            'X-Requested-With': 'fetch',
+            ...(options.headers || {}),
+          },
+        });
+        if (!response.ok) {
+          throw new Error(`Request failed: ${response.status}`);
+        }
+        return response.json();
+      }
+
+      function scheduleHydrationPoll(delayMs, remainingPolls) {
+        if (!payloadUrl || remainingPolls <= 0) {
+          return;
+        }
+        if (hydratePollTimer !== null) {
+          window.clearTimeout(hydratePollTimer);
+        }
+        hydratePollTimer = window.setTimeout(async () => {
+          hydratePollTimer = null;
+          try {
+            const payload = await fetchJson(payloadUrl, { method: 'GET' });
+            if (payload.camera) {
+              updateCameraState(payload.camera);
+            }
+          } catch (_error) {
+            return;
+          }
+          scheduleHydrationPoll(delayMs, remainingPolls - 1);
+        }, delayMs);
+      }
+
+      async function hydrateCameraDetailOnLoad() {
+        if (!hydrateUrl) {
+          return;
+        }
+        try {
+          const payload = await fetchJson(hydrateUrl, { method: 'POST' });
+          if (payload.camera) {
+            updateCameraState(payload.camera);
+          }
+          scheduleHydrationPoll(700, 4);
+        } catch (_error) {
+          // Keep initial render silent and usable even if background hydration fails.
+        }
       }
 
       function updateField(name, value) {
@@ -1580,6 +1634,8 @@
           submitSend2Test(button);
         });
       });
+
+      hydrateCameraDetailOnLoad();
     })();
   </script>
 {% endblock %}
