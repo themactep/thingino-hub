@@ -1,7 +1,29 @@
 {% extends "base.html" %}
 {% block content %}
-  <div class="mb-3" data-camera-detail-page data-camera-id="{{ camera.camera_id }}">
-    <div id="camera-action-feedback" class="alert d-none" role="alert"></div>
+  <style>
+    #camera-action-feedback {
+      position: fixed;
+      top: 1rem;
+      right: 1rem;
+      z-index: 1080;
+      width: min(34rem, calc(100vw - 2rem));
+      margin: 0;
+      box-shadow: 0 0.75rem 2rem rgba(0, 0, 0, 0.18);
+      opacity: 0;
+      transform: translateY(-0.5rem);
+      transition: opacity 160ms ease, transform 160ms ease;
+      pointer-events: none;
+    }
+
+    #camera-action-feedback.is-visible {
+      opacity: 1;
+      transform: translateY(0);
+      pointer-events: auto;
+    }
+  </style>
+
+  <div data-camera-detail-page data-camera-id="{{ camera.camera_id }}">
+    <div id="camera-action-feedback" class="alert d-none" role="status" aria-live="polite"></div>
   </div>
 
   <section class="mb-4">
@@ -585,6 +607,7 @@
       }
 
       const feedback = document.getElementById('camera-action-feedback');
+      let feedbackTimer = null;
       const fallbackText = {
         status: 'unknown',
         api_status: 'unknown',
@@ -845,8 +868,18 @@
         if (!feedback) {
           return;
         }
+        if (feedbackTimer !== null) {
+          window.clearTimeout(feedbackTimer);
+          feedbackTimer = null;
+        }
         feedback.textContent = message;
-        feedback.className = `alert ${category === 'success' ? 'alert-success' : 'alert-danger'}`;
+        feedback.className = `alert ${category === 'success' ? 'alert-success' : 'alert-danger'} is-visible`;
+        feedbackTimer = window.setTimeout(() => {
+          feedback.classList.remove('is-visible');
+          feedback.classList.add('d-none');
+          feedbackTimer = null;
+        }, 3200);
+        feedback.classList.remove('d-none');
       }
 
       function updateField(name, value) {
