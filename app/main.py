@@ -179,10 +179,13 @@ class Hub:
         self.snapshot_cache_dir = Path(os.environ.get("HUB_SNAPSHOT_CACHE_DIR", "/tmp/thinginohub-snapshot-cache"))
         self.onvif_refreshing: set[str] = set()
         self.api_refreshing: set[str] = set()
+        self.snapshot_refreshing: set[str] = set()
+        self.supported_controls_refreshing: set[str] = set()
         self.pending_by_request: dict[str, dict[str, Any]] = {}
         self.last_chat_by_camera: dict[str, int] = {}
         self.native_action_history_by_camera: dict[str, list[dict[str, Any]]] = {}
         self.optimistic_supported_controls_by_camera: dict[str, tuple[float, dict[str, Any]]] = {}
+        self.supported_controls_cache_by_camera: dict[str, dict[str, Any]] = {}
         self.history_store: HistoryStore | None = None
         self.history_db_path = ""
         self.history_enabled = True
@@ -423,6 +426,7 @@ class Hub:
         self._persist_state()
         self._schedule_onvif_refresh_for_all()
         self._schedule_api_refresh_for_all()
+        self._schedule_supported_controls_refresh_for_all()
 
     def _configure_history_store(self, config: dict[str, Any]) -> None:
         history_cfg = config.get("history") or {}
@@ -565,6 +569,7 @@ class Hub:
         LOG.info("Camera registration: id=%s name=%s status=%s", camera_id, self.cameras[camera_id].name, status)
         self._schedule_api_refresh(camera_id)
         self._schedule_onvif_refresh(camera_id)
+        self._schedule_supported_controls_refresh(camera_id)
 
     def _camera_with_runtime_state(self, camera: Camera, existing: Camera | None) -> Camera:
         if existing is None:
@@ -598,6 +603,12 @@ class Hub:
         for camera_id in camera_ids:
             self._schedule_api_refresh(camera_id)
 
+    def _schedule_supported_controls_refresh_for_all(self) -> None:
+        with self.state_lock:
+            camera_ids = list(self.cameras)
+        for camera_id in camera_ids:
+            self._schedule_supported_controls_refresh(camera_id)
+
     def _schedule_api_refresh(self, camera_id: str) -> bool:
         resolved = self._resolve_camera_id(camera_id) or camera_id.strip().lower()
         with self.state_lock:
@@ -617,6 +628,65 @@ class Hub:
         )
         worker.start()
         return True
+
+    def queue_camera_api_refresh(self, camera_id: str) -> str:
+        resolved = self._resolve_camera_id(camera_id) or camera_id.strip().lower()
+        with self.state_lock:
+            camera = self.cameras.get(resolved)
+        if camera is None:
+            raise RuntimeError(f"Unknown camera: {camera_id}")
+        if not self._camera_api_base_url(camera):
+            raise RuntimeError(f"Native API is not configured for {camera.name}")
+        api_scheduled = self._schedule_api_refresh(resolved)
+        controls_scheduled = self._schedule_supported_controls_refresh(resolved)
+        return "scheduled" if api_scheduled or controls_scheduled else "already_running"
+
+    def _schedule_supported_controls_refresh(self, camera_id: str) -> bool:
+        resolved = self._resolve_camera_id(camera_id) or camera_id.strip().lower()
+        with self.state_lock:
+            camera = self.cameras.get(resolved)
+            if camera is None:
+                return False
+            if resolved in self.supported_controls_refreshing:
+                return False
+            self.supported_controls_refreshing.add(resolved)
+        worker = threading.Thread(
+            target=self._refresh_supported_controls_worker,
+            args=(resolved,),
+            name=f"telegrambothub-controls-{resolved[:8]}",
+            daemon=True,
+        )
+        worker.start()
+        return True
+
+    def _refresh_supported_controls_worker(self, camera_id: str) -> None:
+        try:
+            self.refresh_camera_supported_controls_for_ui(camera_id)
+        finally:
+            with self.state_lock:
+                self.supported_controls_refreshing.discard(camera_id)
+
+    def refresh_camera_supported_controls_for_ui(self, camera_id: str) -> dict[str, Any]:
+        resolved = self._resolve_camera_id(camera_id) or camera_id.strip().lower()
+        controls = self._get_camera_supported_controls_for_ui_live(resolved)
+        with self.state_lock:
+            self.supported_controls_cache_by_camera[resolved] = dict(controls)
+        return dict(controls)
+
+    def get_cached_camera_supported_controls_for_ui(self, camera_id: str) -> dict[str, Any]:
+        resolved = self._resolve_camera_id(camera_id) or camera_id.strip().lower()
+        with self.state_lock:
+            camera = self.cameras.get(resolved)
+            cached = self.supported_controls_cache_by_camera.get(resolved)
+        if camera is None:
+            raise RuntimeError(f"Unknown camera: {camera_id}")
+        if cached is None:
+            self._schedule_supported_controls_refresh(resolved)
+            controls = self._default_camera_supported_controls_for_ui(camera)
+        else:
+            controls = dict(cached)
+        controls.update(self._optimistic_supported_controls_overlay(resolved))
+        return controls
 
     def _refresh_api_worker(self, camera_id: str) -> None:
         try:
@@ -750,6 +820,10 @@ class Hub:
             if "target_mode" in daynight:
                 values["native_daynight_requested_mode"] = str(daynight.get("target_mode") or "auto").strip() or "auto"
 
+        privacy = payload.get("privacy") or {}
+        if isinstance(privacy, dict) and "enabled" in privacy:
+            values["native_privacy_enabled"] = bool(self._coerce_bool(privacy.get("enabled")))
+
         if not values:
             return
 
@@ -773,7 +847,7 @@ class Hub:
                 return {}
             return dict(values)
 
-    def control_camera_service(self, camera_id: str, service: str, operation: str) -> dict[str, Any]:
+    def control_camera_service(self, camera_id: str, service: str, operation: str, *, refresh_after: bool = True) -> dict[str, Any]:
         resolved = self._resolve_camera_id(camera_id) or camera_id.strip().lower()
         with self.state_lock:
             camera = self.cameras.get(resolved)
@@ -804,7 +878,10 @@ class Hub:
             "success",
             f"{normalized_service}.{normalized_operation}: {result.get('status') or 'accepted'}",
         )
-        self.refresh_camera_api_details(resolved)
+        if refresh_after:
+            self.refresh_camera_api_details(resolved)
+        else:
+            self._schedule_api_refresh(resolved)
         return result
 
     def restart_camera_streaming_service(self, camera_id: str) -> dict[str, Any]:
@@ -843,6 +920,7 @@ class Hub:
         else:
             self._record_optimistic_supported_controls(resolved, payload)
             self._schedule_api_refresh(resolved)
+            self._schedule_supported_controls_refresh(resolved)
         return result
 
     def update_camera_send2_config(self, camera_id: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -936,7 +1014,7 @@ class Hub:
         self._record_native_action(resolved, "send2_test", "success", detail)
         return result
 
-    def set_camera_privacy(self, camera_id: str, enabled: bool, channel: str = "all") -> dict[str, Any]:
+    def set_camera_privacy(self, camera_id: str, enabled: bool, channel: str = "all", *, refresh_after: bool = True) -> dict[str, Any]:
         resolved = self._resolve_camera_id(camera_id) or camera_id.strip().lower()
         with self.state_lock:
             camera = self.cameras.get(resolved)
@@ -952,7 +1030,15 @@ class Hub:
         state = "enabled" if enabled else "disabled"
         detail = f"{state} on {channel}"
         self._record_native_action(resolved, "privacy", "success", detail)
-        self.refresh_camera_api_details(resolved)
+        if refresh_after:
+            self.refresh_camera_api_details(resolved)
+        else:
+            self._record_optimistic_supported_controls(
+                resolved,
+                {"privacy": {"enabled": enabled}},
+            )
+            self._schedule_api_refresh(resolved)
+            self._schedule_supported_controls_refresh(resolved)
         return result
 
     def set_camera_daynight_mode(self, camera_id: str, mode: str, *, refresh_after: bool = True) -> dict[str, Any]:
@@ -981,6 +1067,7 @@ class Hub:
                 {"daynight": {"target_mode": normalized_mode}},
             )
             self._schedule_api_refresh(resolved)
+            self._schedule_supported_controls_refresh(resolved)
         return result
 
     def record_camera_clip(
@@ -1520,7 +1607,7 @@ class Hub:
             "detail": detail,
         }
 
-    def get_camera_supported_controls_for_ui(self, camera_id: str) -> dict[str, Any]:
+    def _default_camera_supported_controls_for_ui(self, camera: Camera) -> dict[str, Any]:
         defaults = {
             "native_controls_available": False,
             "native_controls_error": "",
@@ -1561,11 +1648,19 @@ class Hub:
             "config_patch_example": json.dumps({"image": {"brightness": 128}}, indent=2),
         }
 
+        web_ui_url = self._camera_web_ui_url(camera)
+        if web_ui_url:
+            defaults["native_send2_overview_url"] = urllib.parse.urljoin(web_ui_url, "tool-send2.html")
+        return defaults
+
+    def _get_camera_supported_controls_for_ui_live(self, camera_id: str) -> dict[str, Any]:
         resolved = self._resolve_camera_id(camera_id) or camera_id.strip().lower()
         with self.state_lock:
             camera = self.cameras.get(resolved)
         if camera is None:
             raise RuntimeError(f"Unknown camera: {camera_id}")
+
+        defaults = self._default_camera_supported_controls_for_ui(camera)
 
         capabilities: dict[str, Any] = {}
         config_payload: dict[str, Any] = {}
@@ -1744,9 +1839,11 @@ class Hub:
                 }
             )
 
-        defaults.update(self._optimistic_supported_controls_overlay(resolved))
         defaults.update(self._camera_send2_controls_for_ui(camera))
         return defaults
+
+    def get_camera_supported_controls_for_ui(self, camera_id: str) -> dict[str, Any]:
+        return self.get_cached_camera_supported_controls_for_ui(camera_id)
 
     def _normalize_native_api_error(self, error: Exception | str) -> str:
         message = str(error).strip()
@@ -2254,6 +2351,16 @@ class Hub:
         )
         worker.start()
         return True
+
+    def queue_camera_onvif_refresh(self, camera_id: str) -> str:
+        resolved = self._resolve_camera_id(camera_id) or camera_id.strip().lower()
+        with self.state_lock:
+            camera = self.cameras.get(resolved)
+        if camera is None:
+            raise RuntimeError(f"Unknown camera: {camera_id}")
+        if not self._camera_onvif_endpoint(camera):
+            raise RuntimeError(f"ONVIF endpoint is not configured for {camera.name}")
+        return "scheduled" if self._schedule_onvif_refresh(resolved) else "already_running"
 
     def _refresh_onvif_worker(self, camera_id: str) -> None:
         try:
@@ -3023,6 +3130,43 @@ class Hub:
         cache_path = self._store_cached_snapshot(resolved, photo, filename)
         self._record_probe_result(resolved, ok=True, error="", cache_path=cache_path)
         return True
+
+    def _schedule_snapshot_refresh(self, camera_id: str) -> bool:
+        resolved = self._resolve_camera_id(camera_id) or camera_id.strip().lower()
+        with self.state_lock:
+            camera = self.cameras.get(resolved)
+            if camera is None:
+                return False
+            if not self._camera_snapshot_url(camera):
+                return False
+            if resolved in self.snapshot_refreshing:
+                return False
+            self.snapshot_refreshing.add(resolved)
+        worker = threading.Thread(
+            target=self._refresh_snapshot_worker,
+            args=(resolved,),
+            name=f"telegrambothub-snapshot-{resolved[:8]}",
+            daemon=True,
+        )
+        worker.start()
+        return True
+
+    def _refresh_snapshot_worker(self, camera_id: str) -> None:
+        try:
+            self.refresh_snapshot_cache(camera_id)
+        finally:
+            with self.state_lock:
+                self.snapshot_refreshing.discard(camera_id)
+
+    def queue_snapshot_refresh(self, camera_id: str) -> str:
+        resolved = self._resolve_camera_id(camera_id) or camera_id.strip().lower()
+        with self.state_lock:
+            camera = self.cameras.get(resolved)
+        if camera is None:
+            raise RuntimeError(f"Unknown camera: {camera_id}")
+        if not self._camera_snapshot_url(camera):
+            raise RuntimeError(f"Snapshot URL is not configured for {camera.name}")
+        return "scheduled" if self._schedule_snapshot_refresh(resolved) else "already_running"
 
     def rescan_cameras(self, camera_id: str | None = None) -> tuple[int, int]:
         if camera_id is None:

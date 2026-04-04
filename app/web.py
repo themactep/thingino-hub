@@ -130,10 +130,73 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
 
         return payload
 
+    def supported_controls_delta_from_payload(config_payload: dict[str, Any]) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
+
+        image = config_payload.get("image") or {}
+        if isinstance(image, dict):
+            for field in ("brightness", "contrast", "saturation", "sharpness"):
+                if field in image:
+                    payload[f"native_image_{field}"] = str(image.get(field) or "")
+            if "anti_flicker" in image:
+                anti_flicker = str(image.get("anti_flicker") or "").strip().lower()
+                aliases = {
+                    "0": "off",
+                    "1": "50hz",
+                    "2": "60hz",
+                }
+                payload["native_image_anti_flicker"] = aliases.get(anti_flicker, anti_flicker)
+            if "hflip" in image:
+                payload["native_image_hflip"] = bool(image.get("hflip"))
+            if "vflip" in image:
+                payload["native_image_vflip"] = bool(image.get("vflip"))
+
+        motion = config_payload.get("motion") or {}
+        if isinstance(motion, dict) and "enabled" in motion:
+            payload["native_motion_enabled"] = bool(motion.get("enabled"))
+
+        daynight = config_payload.get("daynight") or {}
+        if isinstance(daynight, dict):
+            if "enabled" in daynight:
+                payload["native_daynight_enabled"] = bool(daynight.get("enabled"))
+            if "force_mode" in daynight:
+                force_mode = str(daynight.get("force_mode") or "").strip()
+                payload["native_daynight_force_mode"] = force_mode
+                payload["native_daynight_requested_mode"] = force_mode or "auto"
+
+        privacy = config_payload.get("privacy") or {}
+        if isinstance(privacy, dict) and "enabled" in privacy:
+            payload["native_privacy_enabled"] = bool(privacy.get("enabled"))
+
+        return payload
+
+    def merge_camera_payloads(*payloads: dict[str, Any]) -> dict[str, Any]:
+        merged: dict[str, Any] = {}
+        for payload in payloads:
+            if payload:
+                merged.update(payload)
+        return merged
+
+    def camera_fields_payload(camera_id: str, *field_names: str) -> dict[str, Any]:
+        camera = hub.get_camera_for_ui(camera_id)
+        return {
+            field_name: camera[field_name]
+            for field_name in field_names
+            if field_name in camera
+        }
+
+    def action_history_delta_payload(camera_id: str) -> dict[str, Any]:
+        return camera_fields_payload(camera_id, "native_action_history")
+
     def daynight_delta_payload(mode: str) -> dict[str, Any]:
         normalized_mode = str(mode or "").strip().lower() or "auto"
         return {
             "native_daynight_requested_mode": normalized_mode,
+        }
+
+    def privacy_delta_payload(enabled: bool) -> dict[str, Any]:
+        return {
+            "native_privacy_enabled": enabled,
         }
 
     def merge_flip_state(camera_id: str, native_payload: dict[str, Any]) -> dict[str, Any]:
@@ -337,14 +400,12 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
                     f"Requested metadata refresh from {camera_id}.",
                     "success",
                     url_for("camera_detail", camera_id=camera_id),
-                    camera_id=camera_id,
                 )
             else:
                 return action_response(
                     f"Metadata refresh request failed for {camera_id}.",
                     "error",
                     url_for("camera_detail", camera_id=camera_id),
-                    camera_id=camera_id,
                     status_code=400,
                 )
         except Exception as error:
@@ -352,110 +413,97 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
                 f"Rescan failed for {camera_id}: {error}",
                 "error",
                 url_for("camera_detail", camera_id=camera_id),
-                camera_id=camera_id,
                 status_code=500,
             )
 
     @app.post("/refresh-snapshot/<camera_id>")
     def refresh_snapshot(camera_id: str) -> Response:
         try:
-            refreshed = hub.refresh_snapshot_cache(camera_id)
-            if refreshed:
+            result = hub.queue_snapshot_refresh(camera_id)
+            if result == "scheduled":
                 return action_response(
-                    f"Snapshot cache refreshed for {camera_id}.",
+                    f"Snapshot refresh queued for {camera_id}.",
                     "success",
                     url_for("camera_detail", camera_id=camera_id),
-                    camera_id=camera_id,
                 )
             else:
                 return action_response(
-                    f"Snapshot refresh failed for {camera_id}; cached status was updated.",
-                    "error",
+                    f"Snapshot refresh is already running for {camera_id}.",
+                    "success",
                     url_for("camera_detail", camera_id=camera_id),
-                    camera_id=camera_id,
-                    status_code=400,
                 )
         except Exception as error:
             return action_response(
                 f"Snapshot refresh failed for {camera_id}: {error}",
                 "error",
                 url_for("camera_detail", camera_id=camera_id),
-                camera_id=camera_id,
                 status_code=500,
             )
 
     @app.post("/refresh-onvif/<camera_id>")
     def refresh_onvif(camera_id: str) -> Response:
         try:
-            refreshed = hub.refresh_onvif_details(camera_id)
-            if refreshed:
+            result = hub.queue_camera_onvif_refresh(camera_id)
+            if result == "scheduled":
                 return action_response(
-                    f"ONVIF details refreshed for {camera_id}.",
+                    f"ONVIF refresh queued for {camera_id}.",
                     "success",
                     url_for("camera_detail", camera_id=camera_id),
-                    camera_id=camera_id,
                 )
             else:
                 return action_response(
-                    f"ONVIF refresh failed for {camera_id}; last error was updated.",
-                    "error",
+                    f"ONVIF refresh is already running for {camera_id}.",
+                    "success",
                     url_for("camera_detail", camera_id=camera_id),
-                    camera_id=camera_id,
-                    status_code=400,
                 )
         except Exception as error:
             return action_response(
                 f"ONVIF refresh failed for {camera_id}: {error}",
                 "error",
                 url_for("camera_detail", camera_id=camera_id),
-                camera_id=camera_id,
                 status_code=500,
             )
 
     @app.post("/refresh-api/<camera_id>")
     def refresh_api(camera_id: str) -> Response:
         try:
-            refreshed = hub.refresh_camera_api_details(camera_id)
-            if refreshed:
+            result = hub.queue_camera_api_refresh(camera_id)
+            if result == "scheduled":
                 return action_response(
-                    f"Native API details refreshed for {camera_id}.",
+                    f"Native API refresh queued for {camera_id}.",
                     "success",
                     url_for("camera_detail", camera_id=camera_id),
-                    camera_id=camera_id,
                 )
             else:
                 return action_response(
-                    f"Native API refresh failed for {camera_id}; last error was updated.",
-                    "error",
+                    f"Native API refresh is already running for {camera_id}.",
+                    "success",
                     url_for("camera_detail", camera_id=camera_id),
-                    camera_id=camera_id,
-                    status_code=400,
                 )
         except Exception as error:
             return action_response(
                 f"Native API refresh failed for {camera_id}: {error}",
                 "error",
                 url_for("camera_detail", camera_id=camera_id),
-                camera_id=camera_id,
                 status_code=500,
             )
 
     @app.post("/service-action/<camera_id>/<service_name>/<operation>")
     def service_action(camera_id: str, service_name: str, operation: str) -> Response:
         try:
-            result = hub.control_camera_service(camera_id, service_name, operation)
+            result = hub.control_camera_service(camera_id, service_name, operation, refresh_after=False)
             return action_response(
                 f"{service_name.replace('_', ' ').title()} service {operation} accepted for {camera_id}: {result.get('status', 'ok')}",
                 "success",
                 url_for("camera_detail", camera_id=camera_id),
-                camera_id=camera_id,
+                camera_payload=action_history_delta_payload(camera_id),
             )
         except Exception as error:
             return action_response(
                 f"{service_name.replace('_', ' ').title()} service {operation} failed for {camera_id}: {error}",
                 "error",
                 url_for("camera_detail", camera_id=camera_id),
-                camera_id=camera_id,
+                camera_payload={},
                 status_code=500,
             )
 
@@ -523,19 +571,22 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
             )
 
         try:
-            result = hub.patch_camera_config(camera_id, payload)
+            result = hub.patch_camera_config(camera_id, payload, refresh_after=False)
             return action_response(
                 f"Native config patch accepted for {camera_id}: {result.get('status', 'ok')}",
                 "success",
                 url_for("camera_detail", camera_id=camera_id),
-                camera_id=camera_id,
+                camera_payload=merge_camera_payloads(
+                    supported_controls_delta_from_payload(payload),
+                    action_history_delta_payload(camera_id),
+                ),
             )
         except Exception as error:
             return action_response(
                 f"Native config patch failed for {camera_id}: {error}",
                 "error",
                 url_for("camera_detail", camera_id=camera_id),
-                camera_id=camera_id,
+                camera_payload={},
                 status_code=500,
             )
 
@@ -557,7 +608,10 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
                 f"Camera settings applied for {camera_id}: {'; '.join(results)}",
                 "success",
                 url_for("camera_detail", camera_id=camera_id),
-                camera_payload=supported_controls_delta_payload(request.form),
+                camera_payload=merge_camera_payloads(
+                    supported_controls_delta_payload(request.form),
+                    action_history_delta_payload(camera_id),
+                ),
             )
         except Exception as error:
             return action_response(
@@ -612,20 +666,20 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
         enabled = enabled_value in {"1", "true", "yes", "on", "enabled"}
         channel = str(request.form.get("privacy_channel") or "all").strip() or "all"
         try:
-            result = hub.set_camera_privacy(camera_id, enabled=enabled, channel=channel)
+            result = hub.set_camera_privacy(camera_id, enabled=enabled, channel=channel, refresh_after=False)
             state = "enabled" if enabled else "disabled"
             return action_response(
                 f"Privacy {state} for {camera_id}: {result.get('status', 'ok')}",
                 "success",
                 url_for("camera_detail", camera_id=camera_id),
-                camera_id=camera_id,
+                camera_payload=privacy_delta_payload(enabled),
             )
         except Exception as error:
             return action_response(
                 f"Privacy update failed for {camera_id}: {error}",
                 "error",
                 url_for("camera_detail", camera_id=camera_id),
-                camera_id=camera_id,
+                camera_payload={},
                 status_code=500,
             )
 
@@ -666,14 +720,14 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
                 f"Clip recording accepted for {camera_id}{detail}",
                 "success",
                 url_for("camera_detail", camera_id=camera_id),
-                camera_id=camera_id,
+                camera_payload=action_history_delta_payload(camera_id),
             )
         except Exception as error:
             return action_response(
                 f"Clip recording failed for {camera_id}: {error}",
                 "error",
                 url_for("camera_detail", camera_id=camera_id),
-                camera_id=camera_id,
+                camera_payload={},
                 status_code=500,
             )
 
