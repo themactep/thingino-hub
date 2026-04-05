@@ -2647,24 +2647,42 @@ class Hub:
         try:
             client = self._camera_api_client(camera)
             config_payload = client.get_config()
+            capabilities_payload = client.get_capabilities()
         except Exception as error:
             defaults["native_send2_error"] = str(error)
             return defaults
 
         backend_config = config_payload.get("backend") or {}
         prudynt_config = backend_config.get("raw") or backend_config.get("prudynt") or {}
-        send2_config = prudynt_config.get("send2") or {}
         motion_config = prudynt_config.get("motion") or {}
+
+        # send2 settings live in /etc/send2.json on the camera, not in prudynt config.
+        # Use capabilities to learn which services support video, then fetch actual
+        # configured values from the per-service settings endpoints.
+        send2_capabilities = capabilities_payload.get("send2") or {}
 
         services: list[dict[str, Any]] = []
         for service_name, service_label in SEND2_SERVICES:
-            service_data = send2_config.get(service_name) or {}
-            if not isinstance(service_data, dict):
-                service_data = {}
+            service_cap = send2_capabilities.get(service_name) or {}
+            has_send_video = bool(service_cap.get("send_video")) if isinstance(service_cap, dict) else False
+
+            try:
+                photo_setting = client.get_setting(f"send2/services/{service_name}/send-photo")
+                photo_enabled = self._coerce_bool(photo_setting.get("send_photo")) is not False
+            except Exception:
+                photo_enabled = True
+
+            if has_send_video:
+                try:
+                    video_setting = client.get_setting(f"send2/services/{service_name}/send-video")
+                    video_enabled = self._coerce_bool(video_setting.get("send_video")) is True
+                except Exception:
+                    video_enabled = False
+            else:
+                video_enabled = False
+
             motion_key = f"send2{service_name}"
             motion_enabled = bool(self._coerce_bool(motion_config.get(motion_key)))
-            photo_enabled = self._coerce_bool(service_data.get("send_photo")) is not False
-            video_enabled = self._coerce_bool(service_data.get("send_video")) is True
             services.append(
                 {
                     "name": service_name,

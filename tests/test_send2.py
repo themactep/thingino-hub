@@ -352,5 +352,93 @@ class Send2WebRouteTests(unittest.TestCase):
         self.assertIn("camera unavailable", data["message"])
 
 
+# ---------------------------------------------------------------------------
+# Hub._camera_send2_controls_for_ui — reads send2 settings from endpoints
+# ---------------------------------------------------------------------------
+
+class Send2ControlsForUiTests(unittest.TestCase):
+    """_camera_send2_controls_for_ui must read send_photo/send_video from
+    /settings/send2/services/{service}/send-photo|send-video, not from
+    backend.raw.send2 (which is always absent from the config response)."""
+
+    def setUp(self) -> None:
+        self.hub = _make_hub()
+
+    def _make_api_client(
+        self,
+        capabilities: dict[str, Any],
+        settings: dict[str, Any],
+    ) -> MagicMock:
+        """Return a mock CameraApiClient with canned responses."""
+        client = MagicMock(spec=CameraApiClient)
+        client.get_config.return_value = {
+            "backend": {"raw": {"motion": {"send2telegram": True, "sensitivity": 5}}}
+        }
+        client.get_capabilities.return_value = capabilities
+        def _get_setting(path: str) -> dict[str, Any]:
+            return settings.get(path, {})
+        client.get_setting.side_effect = _get_setting
+        return client
+
+    def _run(self, capabilities: dict[str, Any], settings: dict[str, Any]) -> list[dict[str, Any]]:
+        client = self._make_api_client(capabilities, settings)
+        with patch.object(self.hub, "_camera_api_client", return_value=client):
+            result = self.hub._camera_send2_controls_for_ui(self.hub.cameras["cam1"])
+        return result["native_send2_services"]
+
+    def _service(self, services: list[dict[str, Any]], name: str) -> dict[str, Any]:
+        return next(s for s in services if s["name"] == name)
+
+    def test_photo_enabled_reads_from_settings_endpoint(self) -> None:
+        caps = {"send2": {"telegram": {"send_photo": True, "send_video": False}}}
+        settings = {"send2/services/telegram/send-photo": {"send_photo": False}}
+        services = self._run(caps, settings)
+        self.assertFalse(self._service(services, "telegram")["photo_enabled"])
+
+    def test_video_enabled_reads_from_settings_endpoint(self) -> None:
+        caps = {"send2": {"telegram": {"send_photo": True, "send_video": True}}}
+        settings = {
+            "send2/services/telegram/send-photo": {"send_photo": True},
+            "send2/services/telegram/send-video": {"send_video": True},
+        }
+        services = self._run(caps, settings)
+        self.assertTrue(self._service(services, "telegram")["video_enabled"])
+
+    def test_video_disabled_reads_from_settings_endpoint(self) -> None:
+        caps = {"send2": {"telegram": {"send_photo": True, "send_video": True}}}
+        settings = {
+            "send2/services/telegram/send-photo": {"send_photo": True},
+            "send2/services/telegram/send-video": {"send_video": False},
+        }
+        services = self._run(caps, settings)
+        self.assertFalse(self._service(services, "telegram")["video_enabled"])
+
+    def test_service_with_no_video_capability_always_has_video_disabled(self) -> None:
+        caps = {"send2": {"mqtt": {"send_photo": True, "send_video": False}}}
+        settings = {"send2/services/mqtt/send-photo": {"send_photo": True}}
+        services = self._run(caps, settings)
+        svc = self._service(services, "mqtt")
+        self.assertFalse(svc["video_enabled"])
+
+    def test_send2_not_in_config_raw_does_not_affect_result(self) -> None:
+        """Even if backend.raw has no send2 key, values come from settings endpoints."""
+        caps = {"send2": {"ftp": {"send_photo": True, "send_video": True}}}
+        settings = {
+            "send2/services/ftp/send-photo": {"send_photo": True},
+            "send2/services/ftp/send-video": {"send_video": True},
+        }
+        services = self._run(caps, settings)
+        svc = self._service(services, "ftp")
+        self.assertTrue(svc["photo_enabled"])
+        self.assertTrue(svc["video_enabled"])
+
+    def test_motion_enabled_comes_from_prudynt_config(self) -> None:
+        caps = {"send2": {"telegram": {"send_photo": True, "send_video": False}}}
+        settings = {"send2/services/telegram/send-photo": {"send_photo": True}}
+        services = self._run(caps, settings)
+        # motion.send2telegram = True in our fake config
+        self.assertTrue(self._service(services, "telegram")["motion_enabled"])
+
+
 if __name__ == "__main__":
     unittest.main()
