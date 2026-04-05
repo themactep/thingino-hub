@@ -1,5 +1,6 @@
 import unittest
 import sys
+import threading
 import types
 
 
@@ -24,6 +25,7 @@ class PairingInstallTests(unittest.TestCase):
     def test_confirmed_mqtt_install_persists_generated_enrollment(self) -> None:
         hub = object.__new__(Hub)
         hub.cameras = {"cam1": Camera(camera_id="cam1", name="Test Camera", ip="192.168.1.2")}
+        hub.state_lock = threading.Lock()
         hub.command_reply_timeout_seconds = 5.0
 
         saved_enrollments: list[dict[str, str]] = []
@@ -69,6 +71,7 @@ class PairingInstallTests(unittest.TestCase):
     def test_timed_out_mqtt_install_does_not_persist_generated_enrollment(self) -> None:
         hub = object.__new__(Hub)
         hub.cameras = {"cam1": Camera(camera_id="cam1", name="Test Camera", ip="192.168.1.2")}
+        hub.state_lock = threading.Lock()
         hub.command_reply_timeout_seconds = 5.0
 
         saved_enrollments: list[dict[str, str]] = []

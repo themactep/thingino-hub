@@ -4,7 +4,7 @@
 
 It solves the Telegram limitation where only one process can poll `getUpdates` for a given bot token. Instead of running one Telegram bot daemon on every camera, you run one hub and let it fan out commands to cameras over MQTT.
 
-For snapshots, the hub can fetch the camera image directly from a registered `snapshot_url`. That URL can be the existing WebUI snapshot endpoint or an ONVIF-exposed snapshot URI.
+For snapshots, the hub can fetch the camera image directly from a registered `snapshot_url`. That URL can be an ONVIF-exposed snapshot URI or any direct image endpoint on the camera.
 
 The hub can also talk to the new Thingino-native camera API. In the current
 implementation, that API is typically exposed under `/api/v1`.
@@ -212,7 +212,7 @@ Notes:
 - `history.recent_actions_limit` controls how many recent database-backed native actions are shown on each camera detail page
 - the live event feed merges hub actions, MQTT registrations, and native camera-agent `/events` activity into one stream on the dedicated `/events` page
 - bulk actions currently support queued API/ONVIF/snapshot refreshes, MQTT rescan requests, and first-pass streaming service start/stop/restart operations across selected cameras
-- the primary enrollment path is `Connect Camera`: provide the camera IP and valid Web UI / ONVIF credentials, and the hub resolves the discovered camera identity, repairs pairing if needed, stores the generated bearer token, and hydrates the camera state in one step
+- the primary enrollment path is `Connect Camera`: provide the camera IP and valid ONVIF credentials, and the hub resolves the discovered camera identity, installs the pairing bootstrap over MQTT, stores the generated bearer token, and hydrates the camera state in one step
 - the enrollment page still exposes advanced helpers for probe, pairing repair, and showing the generated pairing details when you need to inspect the bootstrap payload
 - camera detail pages include a `Connect to Hub` form that reuses the discovered roster entry and only asks for credentials, a `Pair` button for direct MQTT bootstrap repair, and a copyable OTA rebuild command in the form `CAMERA=<camera_image_id> IP=<camera_ip> make cleanbuild upgrade_ota`
 - partial override saves preserve existing auth and token values, so editing a display name or another single field no longer clears unrelated credentials
@@ -320,20 +320,16 @@ If ONVIF credentials are omitted, the hub falls back to Thingino's default `thin
 
 ## Camera-Side Setup
 
-Each camera needs an MQTT subscription that hands incoming payloads to the local Telegram camera agent.
+Each camera needs an MQTT subscription that hands incoming payloads to the local Telegram camera agent. This subscription is configured in the camera firmware and does not require any manual setup from the hub.
 
-On Thingino cameras with the new firmware-side agent installed:
-
-1. Open `MQTT Subscriptions`
-2. Enable the service and point it at the same MQTT broker as the hub
-3. Add a subscription with:
+On Thingino cameras with the firmware-side agent installed, the required subscription is pre-configured:
 
 ```text
 Topic:  thingino/cam/%id/cmd
 Action: telegram-cam-agent "$MQTT_PAYLOAD"
 ```
 
-The `%id` shorthand resolves to the camera SoC serial number first, with MAC-based fallback, which matches the `camera_id` used by the hub.
+The `%id` shorthand resolves to the camera SoC serial number first, with MAC-based fallback, which matches the `camera_id` used by the hub. The hub communicates with cameras exclusively via MQTT commands, ONVIF, and the native camera agent API — it does not access any camera-side web UI or CGI endpoints.
 
 ### Auto-registration
 
@@ -375,7 +371,7 @@ UI_BIND=0.0.0.0:8080:8080 sh run-podman.sh
 }
 ```
 
-The hub uses `snapshot_url` for `/cam <id> snap`. If your camera already exposes a stable ONVIF snapshot URI, publish or configure that URL instead of the default WebUI path.
+The hub uses `snapshot_url` for `/cam <id> snap`. If your camera already exposes a stable ONVIF snapshot URI, publish or configure that URL instead of the default snapshot path.
 
 ### Media Commands
 
@@ -477,7 +473,7 @@ For current Thingino agent builds, that ID is the agent-style `%id` value expose
 Do not use these values for hub enrollment or pairing identity:
 
 - native API `/api/v1/device.id`
-- legacy WebUI / CGI `camera_id`
+- legacy CGI `camera_id`
 
 The connect and enroll flows resolve the authoritative hub camera ID from the current roster automatically, so the user only needs the camera IP and valid credentials.
 
@@ -531,7 +527,7 @@ That camera-side agent currently supports:
 - Verify the MQTT broker settings
 - Confirm the camera is subscribed to `thingino/cam/<camera_id>/cmd`
 - Check that the camera-side agent understands the JSON payload format
-- If the camera is auto-discovered but not fully connected yet, use `Connect to Hub` on the camera page or `/enroll`; the hub can repair the camera-side MQTT command subscription and reinstall the pairing bootstrap when credentials are valid
+- If the camera is auto-discovered but not fully connected yet, use `Connect to Hub` on the camera page or `/enroll`; the hub sends the pairing bootstrap command over MQTT and installs the bearer token when credentials are valid
 
 ### Replies never come back to Telegram
 

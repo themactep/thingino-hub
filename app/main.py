@@ -1110,14 +1110,34 @@ class Hub:
             raise RuntimeError(f"Unknown camera: {camera_id}")
 
         try:
-            current_payload = self._camera_send2_request(camera, "/x/json-send2.cgi", method="GET")
-            merged_payload = self._merge_send2_payload(current_payload, payload)
-            result = self._camera_send2_request(camera, "/x/json-send2.cgi", method="POST", json_payload=merged_payload)
+            client = self._camera_api_client(camera)
+            results: list[str] = []
+
+            motion = payload.get("motion") or {}
+            if "sensitivity" in motion:
+                client.patch_setting("motion/sensitivity", {"sensitivity": motion["sensitivity"]})
+                results.append("motion.sensitivity")
+            if "cooldown_time" in motion:
+                client.patch_setting("motion/cooldown-time", {"cooldown_time": motion["cooldown_time"]})
+                results.append("motion.cooldown_time")
+            for service_name, _label in SEND2_SERVICES:
+                motion_key = f"send2{service_name}"
+                if motion_key in motion:
+                    client.patch_setting(f"motion/outputs/send2/{service_name}", {"enabled": bool(motion[motion_key])})
+                    results.append(f"motion.{motion_key}")
+                service_data = payload.get(service_name)
+                if isinstance(service_data, dict):
+                    if "send_photo" in service_data:
+                        client.patch_setting(f"send2/services/{service_name}/send-photo", {"enabled": bool(service_data["send_photo"])})
+                        results.append(f"{service_name}.send_photo")
+                    if "send_video" in service_data:
+                        client.patch_setting(f"send2/services/{service_name}/send-video", {"enabled": bool(service_data["send_video"])})
+                        results.append(f"{service_name}.send_video")
         except Exception as error:
             self._record_native_action(resolved, "send2_config", "error", str(error))
             raise
 
-        detail = ", ".join(sorted(payload.keys())) or "accepted"
+        detail = ", ".join(results) or "accepted"
         self._record_native_action(resolved, "send2_config", "success", detail)
         self._record_history_config_changes(
             resolved,
@@ -1125,23 +1145,7 @@ class Hub:
             source="native_api",
             change_type="send2_patch",
         )
-        return result
-
-    def _merge_send2_payload(self, current: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
-        merged = copy.deepcopy(current)
-
-        def merge_dict(target: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
-            for key, value in updates.items():
-                if isinstance(value, dict):
-                    existing = target.get(key)
-                    if not isinstance(existing, dict):
-                        existing = {}
-                    target[key] = merge_dict(dict(existing), value)
-                else:
-                    target[key] = value
-            return target
-
-        return merge_dict(merged, patch)
+        return {"status": "accepted", "applied": results}
 
     def _is_timeout_error(self, error: Exception) -> bool:
         message = str(error or "").strip().lower()
@@ -1169,15 +1173,17 @@ class Hub:
         if normalized_type not in {"", "photo", "video"}:
             raise RuntimeError("Send2 test type must be empty, photo, or video")
 
-        query = {"to": normalized_service}
-        if verbose:
-            query["verbose"] = "1"
+        action_path = f"send2/{normalized_service}/test"
         if normalized_type:
-            query["type"] = normalized_type
+            action_path = f"{action_path}-{normalized_type}"
 
-        path = f"/x/send.cgi?{urllib.parse.urlencode(query)}"
         try:
-            result = self._camera_send2_request(camera, path, method="GET", timeout_seconds=max(self.snapshot_heartbeat_timeout_seconds, 30))
+            client = self._camera_api_client(camera)
+            result = client.post_action(
+                action_path,
+                {"verbose": verbose} if verbose else None,
+                timeout=max(self.snapshot_heartbeat_timeout_seconds, 30),
+            )
         except Exception as error:
             if self._is_timeout_error(error):
                 detail = normalized_service
@@ -2067,16 +2073,12 @@ class Hub:
             "native_record_supported": False,
             "native_send2_available": False,
             "native_send2_error": "",
-            "native_send2_overview_url": "",
             "native_send2_motion_sensitivity": "",
             "native_send2_motion_cooldown": "",
             "native_send2_services": [],
             "config_patch_example": json.dumps({"image": {"brightness": 128}}, indent=2),
         }
 
-        web_ui_url = self._camera_web_ui_url(camera)
-        if web_ui_url:
-            defaults["native_send2_overview_url"] = urllib.parse.urljoin(web_ui_url, "tool-send2.html")
         return defaults
 
     def _get_camera_supported_controls_for_ui_live(self, camera_id: str) -> dict[str, Any]:
@@ -2101,12 +2103,6 @@ class Hub:
             native_controls_ok = True
         except Exception as error:
             defaults["native_controls_error"] = self._normalize_native_api_error(error)
-
-        if native_controls_ok:
-            try:
-                live_stream_payloads = self._camera_prudynt_stream_payload(camera)
-            except Exception:
-                live_stream_payloads = {}
 
         backend_config = config_payload.get("backend") or {}
         prudynt_config = (backend_config.get("raw") or backend_config.get("prudynt") or {})
@@ -2616,276 +2612,44 @@ class Hub:
         scheme = parsed.scheme or "http"
         return urllib.parse.urlunsplit((scheme, parsed.netloc, f"/x/{normalized_stream}.mjpg", "", ""))
 
-    def _camera_web_ui_url(self, camera: Camera) -> str:
-        if camera.ip:
-            return f"http://{camera.ip}/"
-
-        snapshot_url = self._camera_snapshot_url(camera)
-        if not snapshot_url:
-            return ""
-
-        parsed = urllib.parse.urlsplit(snapshot_url)
-        if not parsed.scheme or not parsed.netloc:
-            return ""
-        return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, "/", "", ""))
-
-    def _camera_send2_request(
-        self,
-        camera: Camera,
-        path: str,
-        *,
-        method: str = "GET",
-        json_payload: dict[str, Any] | None = None,
-        timeout_seconds: int | None = None,
-    ) -> dict[str, Any]:
-        return self._camera_webui_json_request(
-            camera,
-            path,
-            method=method,
-            json_payload=json_payload,
-            timeout_seconds=timeout_seconds,
-        )
-
-    def _camera_webui_json_request(
-        self,
-        camera: Camera,
-        path: str,
-        *,
-        method: str = "GET",
-        json_payload: dict[str, Any] | None = None,
-        timeout_seconds: int | None = None,
-    ) -> dict[str, Any]:
-        base_url = self._camera_web_ui_url(camera)
-        if not base_url:
-            raise RuntimeError(f"Web UI URL is not configured for {camera.name}")
-
-        url = urllib.parse.urljoin(base_url, path.lstrip("/"))
-        headers = {"Accept": "application/json"}
-        body = None
-        if json_payload is not None:
-            headers["Content-Type"] = "application/json"
-            body = json.dumps(json_payload).encode("utf-8")
-
-        request = urllib.request.Request(url, data=body, method=method.upper(), headers=headers)
-        username, password = self._camera_onvif_credentials(camera)
-        if username or password:
-            auth_token = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
-            request.add_header("Authorization", f"Basic {auth_token}")
-
-        try:
-            timeout = max(int(timeout_seconds or 0), self.snapshot_heartbeat_timeout_seconds, 5)
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                payload = response.read().decode("utf-8", errors="replace")
-        except urllib.error.HTTPError as error:
-            detail = error.read().decode("utf-8", errors="replace").strip() or error.reason or f"HTTP {error.code}"
-            raise RuntimeError(detail) from error
-        except urllib.error.URLError as error:
-            raise RuntimeError(str(error.reason or error)) from error
-
-        try:
-            decoded = json.loads(payload)
-        except json.JSONDecodeError as error:
-            raise RuntimeError("Camera send2 endpoint returned invalid JSON") from error
-        if not isinstance(decoded, dict):
-            raise RuntimeError("Camera send2 endpoint returned an invalid response")
-        return decoded
-
-    def _ensure_camera_pairing_command_subscription(self, camera: Camera) -> dict[str, Any]:
-        mqtt_cfg = self.config["mqtt"]
-        payload = self._camera_webui_json_request(
-            camera,
-            "/x/json-config-mqtt-sub.cgi",
-            method="GET",
-            timeout_seconds=max(self.snapshot_heartbeat_timeout_seconds, 10),
-        )
-        subscriptions = payload.get("subscriptions")
-        if not isinstance(subscriptions, list):
-            subscriptions = []
-
-        expected_topic = "thingino/cam/%id/cmd"
-        expected_action = 'telegram-cam-agent "$MQTT_PAYLOAD"'
-        expected_subscription = {
-            "enabled": True,
-            "topic": expected_topic,
-            "qos": 0,
-            "action": expected_action,
-        }
-        invalid_camera_hosts = {"", "127.0.0.1", "localhost", "host.containers.internal", "host.docker.internal"}
-
-        current_subscriptions: list[dict[str, Any]] = []
-        normalized_subscriptions: list[dict[str, Any]] = []
-        found_expected = False
-        for item in subscriptions:
-            if not isinstance(item, dict):
-                continue
-            normalized = {
-                "enabled": bool(item.get("enabled")),
-                "topic": str(item.get("topic") or "").strip(),
-                "qos": int(item.get("qos") or 0),
-                "action": str(item.get("action") or "").strip(),
-            }
-            current_subscriptions.append(dict(normalized))
-            if normalized["topic"] == expected_topic and normalized["action"] == expected_action:
-                normalized.update(expected_subscription)
-                found_expected = True
-            normalized_subscriptions.append(normalized)
-
-        if not found_expected:
-            normalized_subscriptions.append(dict(expected_subscription))
-
-        hub_host = str(mqtt_cfg.get("host") or "").strip()
-        broker_host = hub_host
-        broker_port = int(mqtt_cfg.get("port", 1883) or 1883)
-        broker_username = str(mqtt_cfg.get("username") or "").strip()
-        broker_password = str(mqtt_cfg.get("password") or "")
-        broker_use_ssl = bool(mqtt_cfg.get("use_tls"))
-
-        if broker_host in invalid_camera_hosts:
-            current_host = str(payload.get("host") or "").strip()
-            if current_host not in invalid_camera_hosts:
-                broker_host = current_host
-                broker_port = int(payload.get("port") or broker_port)
-                broker_username = str(payload.get("username") or broker_username).strip()
-                broker_password = str(payload.get("password") or broker_password)
-                broker_use_ssl = bool(payload.get("use_ssl"))
-            else:
-                send2_payload = self._camera_send2_request(camera, "/x/json-send2.cgi", method="GET")
-                send2_mqtt = send2_payload.get("mqtt") if isinstance(send2_payload, dict) else None
-                if isinstance(send2_mqtt, dict):
-                    send2_host = str(send2_mqtt.get("host") or "").strip()
-                    if send2_host not in invalid_camera_hosts:
-                        broker_host = send2_host
-                        broker_port = int(send2_mqtt.get("port") or broker_port)
-                        broker_username = str(send2_mqtt.get("username") or broker_username).strip()
-                        broker_password = str(send2_mqtt.get("password") or broker_password)
-                        broker_use_ssl = bool(send2_mqtt.get("use_ssl"))
-
-        if broker_host in invalid_camera_hosts:
-            raise RuntimeError(
-                "Cannot repair camera MQTT command listener automatically because the hub broker host is container-local and the camera has no reachable broker host configured"
-            )
-
-        desired_payload = {
-            "enabled": True,
-            "host": broker_host,
-            "port": broker_port,
-            "username": broker_username,
-            "password": broker_password,
-            "use_ssl": broker_use_ssl,
-            "subscriptions": normalized_subscriptions,
-        }
-
-        current_payload = {
-            "enabled": bool(payload.get("enabled")),
-            "host": str(payload.get("host") or "").strip(),
-            "port": int(payload.get("port") or 1883),
-            "username": str(payload.get("username") or "").strip(),
-            "password": str(payload.get("password") or ""),
-            "use_ssl": bool(payload.get("use_ssl")),
-            "subscriptions": current_subscriptions,
-        }
-
-        config_changed = current_payload != desired_payload
-        if config_changed:
-            self._camera_webui_json_request(
-                camera,
-                "/x/json-config-mqtt-sub.cgi",
-                method="POST",
-                json_payload=desired_payload,
-                timeout_seconds=max(self.snapshot_heartbeat_timeout_seconds, 10),
-            )
-
-        self._camera_webui_json_request(
-            camera,
-            "/x/mqtt-sub-restart.cgi",
-            method="POST",
-            timeout_seconds=max(self.snapshot_heartbeat_timeout_seconds, 10),
-        )
-        time.sleep(1)
-        return {
-            "config_changed": config_changed,
-            "host": broker_host,
-            "topic": expected_topic,
-        }
-
-    def _camera_prudynt_stream_payload(self, camera: Camera) -> dict[str, dict[str, Any]]:
-        payload = self._camera_webui_json_request(
-            camera,
-            "/x/json-prudynt.cgi",
-            method="POST",
-            json_payload={
-                "stream0": {"width": None, "height": None, "fps": None},
-                "stream1": {"width": None, "height": None, "fps": None},
-            },
-            timeout_seconds=max(self.snapshot_heartbeat_timeout_seconds, 10),
-        )
-        return {
-            stream_name: stream_payload
-            for stream_name, stream_payload in payload.items()
-            if stream_name.startswith("stream") and isinstance(stream_payload, dict)
-        }
-
     def _camera_send2_controls_for_ui(self, camera: Camera) -> dict[str, Any]:
         defaults = {
             "native_send2_available": False,
             "native_send2_error": "",
-            "native_send2_overview_url": "",
             "native_send2_motion_sensitivity": "",
             "native_send2_motion_cooldown": "",
             "native_send2_services": [],
         }
 
-        overview_url = urllib.parse.urljoin(self._camera_web_ui_url(camera), "tool-send2.html") if self._camera_web_ui_url(camera) else ""
-        defaults["native_send2_overview_url"] = overview_url
-
         try:
-            payload = self._camera_send2_request(camera, "/x/json-send2.cgi", method="GET")
+            client = self._camera_api_client(camera)
+            config_payload = client.get_config()
         except Exception as error:
             defaults["native_send2_error"] = str(error)
             return defaults
 
-        motion = payload.get("motion") or {}
+        backend_config = config_payload.get("backend") or {}
+        prudynt_config = backend_config.get("raw") or backend_config.get("prudynt") or {}
+        send2_config = prudynt_config.get("send2") or {}
+        motion_config = prudynt_config.get("motion") or {}
+
         services: list[dict[str, Any]] = []
         for service_name, service_label in SEND2_SERVICES:
-            service_data = payload.get(service_name) or {}
+            service_data = send2_config.get(service_name) or {}
             if not isinstance(service_data, dict):
                 service_data = {}
-            required_fields = SEND2_REQUIRED_FIELDS.get(service_name, [])
-            missing_fields = [field for field in required_fields if not self._send2_value_is_present(service_data.get(field))]
-            filled_fields = [field for field in required_fields if field not in missing_fields]
-            has_any_config = any(
-                self._send2_value_is_present(value)
-                for key, value in service_data.items()
-                if key not in {"send_photo", "send_video"}
-            )
-            if not required_fields:
-                readiness = "ready" if has_any_config else "unknown"
-                readiness_summary = "Ready" if has_any_config else "Open camera page to configure"
-            elif not missing_fields:
-                readiness = "ready"
-                readiness_summary = "Ready"
-            elif filled_fields:
-                readiness = "partial"
-                readiness_summary = f"Missing: {', '.join(missing_fields)}"
-            else:
-                readiness = "not_configured"
-                readiness_summary = "Not configured"
-
+            motion_key = f"send2{service_name}"
+            motion_enabled = bool(self._coerce_bool(motion_config.get(motion_key)))
             photo_enabled = self._coerce_bool(service_data.get("send_photo")) is not False
             video_enabled = self._coerce_bool(service_data.get("send_video")) is True
             services.append(
                 {
                     "name": service_name,
                     "label": service_label,
-                    "motion_key": f"send2{service_name}",
-                    "motion_enabled": bool(self._coerce_bool(motion.get(f"send2{service_name}"))),
+                    "motion_key": motion_key,
+                    "motion_enabled": motion_enabled,
                     "photo_enabled": photo_enabled,
                     "video_enabled": video_enabled,
-                    "config_url": urllib.parse.urljoin(self._camera_web_ui_url(camera), f"tool-send2-{service_name}.html") if self._camera_web_ui_url(camera) else "",
-                    "configured": has_any_config,
-                    "readiness": readiness,
-                    "readiness_summary": readiness_summary,
-                    "missing_fields": missing_fields,
                     "photo_test_supported": photo_enabled,
                     "video_test_supported": video_enabled,
                     "default_test_supported": not photo_enabled and not video_enabled,
@@ -2895,23 +2659,12 @@ class Hub:
         defaults.update(
             {
                 "native_send2_available": True,
-                "native_send2_motion_sensitivity": "" if motion.get("sensitivity") in (None, "") else str(motion.get("sensitivity")),
-                "native_send2_motion_cooldown": "" if motion.get("cooldown_time") in (None, "") else str(motion.get("cooldown_time")),
+                "native_send2_motion_sensitivity": "" if motion_config.get("sensitivity") in (None, "") else str(motion_config.get("sensitivity")),
+                "native_send2_motion_cooldown": "" if motion_config.get("cooldown_time") in (None, "") else str(motion_config.get("cooldown_time")),
                 "native_send2_services": services,
             }
         )
         return defaults
-
-    def _send2_value_is_present(self, value: Any) -> bool:
-        if value is None:
-            return False
-        if value is False:
-            return False
-        if isinstance(value, str):
-            return bool(value.strip())
-        if isinstance(value, (list, dict, tuple, set)):
-            return bool(value)
-        return True
 
     def _camera_onvif_endpoint(self, camera: Camera) -> str:
         endpoint = camera.onvif_endpoint.strip()
@@ -3455,7 +3208,6 @@ class Hub:
             source="hub",
             payload_summary=json.dumps({
                 "api_base_url": result.get("api_base_url"),
-                "pairing_listener": result.get("pairing_listener"),
             }, sort_keys=True),
         )
         onvif_username = str(enrollment.get("onvif_username") or "").strip()
@@ -3716,8 +3468,6 @@ class Hub:
             ip=str(save_entry.get("ip") or camera.ip),
         )
 
-        pairing_listener = self._ensure_camera_pairing_command_subscription(pairing_camera)
-
         publish_result = self._publish_camera_command(
             resolved,
             "install-agent-bootstrap",
@@ -3776,7 +3526,6 @@ class Hub:
             source="hub",
             payload_summary=json.dumps({
                 "api_base_url": bundle.get("api_base_url"),
-                "listener_repaired": bool(pairing_listener.get("config_changed")),
             }, sort_keys=True),
         )
 
@@ -3787,7 +3536,6 @@ class Hub:
             **bundle,
             "status": status,
             "status_detail": detail,
-            "pairing_listener": pairing_listener,
             "mqtt": {
                 "camera_id": resolved,
                 "published": True,
@@ -4202,7 +3950,6 @@ class Hub:
             "camera_image_id": camera_image_id,
             "ota_upgrade_command": self._camera_ota_upgrade_command_for_ui(camera),
             "snapshot_url": (self._camera_snapshot_url(camera) or "") if live_links_available else "",
-            "web_ui_url": self._camera_web_ui_url(camera) if live_links_available else "",
             "api_base_url": self._camera_api_base_url(camera) if live_links_available else "",
             "api_status": api_status,
             "api_last_ok_at": self._format_timestamp(camera.api_last_ok_at),

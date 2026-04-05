@@ -199,9 +199,6 @@
             {% if camera.snapshot_url %}
               <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('preview_snapshot', camera_id=camera.camera_id) }}" target="_blank" rel="noreferrer">Snapshot URL</a>
             {% endif %}
-            {% if camera.web_ui_url %}
-              <a class="btn btn-outline-secondary btn-sm" href="{{ camera.web_ui_url }}" target="_blank" rel="noreferrer">Camera UI</a>
-            {% endif %}
               <button type="button" class="btn btn-outline-danger btn-sm" data-async-action="{{ url_for('delete_camera', camera_id=camera.camera_id) }}" data-confirm="Remove {{ camera.name }} from the roster? It can reappear if the camera registers again.">Delete</button>
             </div>
           </div>
@@ -384,11 +381,6 @@
                   <h3 class="h6 mb-1">Send2 Services</h3>
                   <p class="text-body-secondary mb-0">Choose which camera-side send2 scripts run on motion, then trigger a test without leaving the hub.</p>
                 </div>
-                <div class="d-flex flex-wrap gap-2">
-                {% if camera.native_send2_overview_url %}
-                  <a class="btn btn-outline-secondary btn-sm" href="{{ camera.native_send2_overview_url }}" target="_blank" rel="noreferrer">Open Native Send2 Page</a>
-                {% endif %}
-                </div>
               </div>
             {% if camera.native_send2_error %}
               <div class="alert alert-warning mb-0">Send2 overview is unavailable right now: {{ camera.native_send2_error }}</div>
@@ -409,7 +401,6 @@
                     <tr>
                       <td>
                         <div class="fw-semibold">{{ service.label }}</div>
-                        <div class="small text-body-secondary" data-send2-readiness-summary="{{ service.name }}">{{ service.readiness_summary }}</div>
                       </td>
                     <td>
                       <div class="form-check form-switch m-0">
@@ -433,11 +424,6 @@
                       <div class="d-flex flex-wrap gap-2">
                         <button type="button" class="btn btn-outline-secondary btn-sm" data-send2-test-action="{{ url_for('send2_test', camera_id=camera.camera_id, service_name=service.name) }}" data-send2-service-label="{{ service.label }} photo" data-send2-type="photo" data-send2-photo-action="{{ service.name }}" {% if not camera.native_send2_available or not service.photo_enabled %}disabled{% endif %}>Send Photo</button>
                         <button type="button" class="btn btn-outline-secondary btn-sm" data-send2-test-action="{{ url_for('send2_test', camera_id=camera.camera_id, service_name=service.name) }}" data-send2-service-label="{{ service.label }} video" data-send2-type="video" data-send2-video-action="{{ service.name }}" {% if not camera.native_send2_available or not service.video_enabled %}disabled{% endif %}>Send Video</button>
-                        {% if service.config_url %}
-                          <a class="btn btn-outline-secondary btn-sm" href="{{ service.config_url }}" target="_blank" rel="noreferrer" data-send2-config-action="{{ service.name }}">Configure</a>
-                        {% else %}
-                          <button type="button" class="btn btn-outline-secondary btn-sm" data-send2-config-action="{{ service.name }}" disabled>Configure</button>
-                        {% endif %}
                       </div>
                     </td>
                   </tr>
@@ -1144,11 +1130,6 @@
               motionToggle.checked = Boolean(service.motion_enabled);
             }
 
-            const readinessSummary = document.querySelector(`[data-send2-readiness-summary="${service.name}"]`);
-            if (readinessSummary && 'readiness_summary' in service) {
-              readinessSummary.textContent = service.readiness_summary || '';
-            }
-
             const photoToggle = document.getElementById(`send2${service.name}_photo`);
             if (photoToggle && 'photo_enabled' in service) {
               photoToggle.checked = Boolean(service.photo_enabled);
@@ -1161,10 +1142,6 @@
               setSend2ActionEnabled(service.name, 'video', Boolean(service.video_enabled));
             }
 
-            const configAction = document.querySelector(`[data-send2-config-action="${service.name}"]`);
-            if (configAction instanceof HTMLButtonElement && 'config_url' in service) {
-              configAction.disabled = true;
-            }
           });
         }
       }

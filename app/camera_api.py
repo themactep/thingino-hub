@@ -91,6 +91,18 @@ class CameraApiClient:
         extension = mimetypes.guess_extension(content_type.split(";", 1)[0].strip()) or ".jpg"
         return body, f"snapshot{extension}"
 
+    def get_setting(self, path: str) -> dict[str, Any]:
+        normalized = path.strip("/")
+        return self._json_request("GET", f"/settings/{normalized}")
+
+    def patch_setting(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        normalized = path.strip("/")
+        return self._json_request("PATCH", f"/settings/{normalized}", payload=payload, timeout=self._control_timeout())
+
+    def post_action(self, path: str, payload: dict[str, Any] | None = None, timeout: int | None = None) -> dict[str, Any]:
+        normalized = path.strip("/")
+        return self._json_request("POST", f"/actions/{normalized}", payload=payload, timeout=timeout or self._control_timeout())
+
     def probe(self) -> dict[str, Any]:
         return {
             "device": self.get_device(),
