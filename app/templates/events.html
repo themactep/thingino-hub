@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block content %}
+  <section class="card shadow-sm mb-4">
+    <div class="card-body">
+      <div class="d-flex flex-column flex-md-row justify-content-between gap-3 mb-3">
+        <div>
+          <h1 class="h3 mb-1">Live Event Feed</h1>
+          <p class="text-body-secondary mb-0">Hub actions, camera registrations, and native camera-agent events stream here as they happen.</p>
+        </div>
+        <div class="small text-body-secondary">Motion, state changes, recording completion, health warnings, and queued hub operations are kept together.</div>
+      </div>
+
+      <div class="list-group" id="dashboard-event-feed">
+      {% for entry in recent_events %}
+        <div class="list-group-item">
+          <div class="d-flex flex-column flex-md-row justify-content-between gap-2">
+            <div>
+              <div class="d-flex flex-wrap align-items-center gap-2 mb-1">
+                <span class="badge {{ 'text-bg-success' if entry.status == 'success' else 'text-bg-danger' if entry.status == 'error' else 'text-bg-warning' if entry.status == 'warning' else 'text-bg-secondary' }}">{{ entry.status }}</span>
+                <strong>{{ entry.camera_name or entry.camera_id }}</strong>
+                <span class="text-capitalize">{{ entry.name }}</span>
+                <span class="small text-body-secondary">{{ entry.source.replace('_', ' ') }}</span>
+              </div>
+              <div class="small text-body-secondary">{{ entry.detail or 'No detail provided.' }}</div>
+            </div>
+            <div class="small text-body-secondary text-md-end">{{ entry.at or 'just now' }}</div>
+          </div>
+        </div>
+      {% else %}
+        <div class="list-group-item text-body-secondary" id="dashboard-event-feed-empty">No live camera events have been recorded yet.</div>
+      {% endfor %}
+      </div>
+    </div>
+  </section>
+
+  <script>
+    (() => {
+      const eventFeed = document.getElementById("dashboard-event-feed");
+      const renderEvent = (entry) => {
+        const wrapper = document.createElement("div");
+        const statusClass = entry.status === "success"
+          ? "text-bg-success"
+          : entry.status === "error"
+            ? "text-bg-danger"
+            : entry.status === "warning"
+              ? "text-bg-warning"
+              : "text-bg-secondary";
+        wrapper.className = "list-group-item";
+        wrapper.innerHTML = `
+          <div class="d-flex flex-column flex-md-row justify-content-between gap-2">
+            <div>
+              <div class="d-flex flex-wrap align-items-center gap-2 mb-1">
+                <span class="badge ${statusClass}">${entry.status || 'info'}</span>
+                <strong>${entry.camera_name || entry.camera_id || 'camera'}</strong>
+                <span class="text-capitalize">${entry.name || 'event'}</span>
+                <span class="small text-body-secondary">${(entry.source || 'hub').replaceAll('_', ' ')}</span>
+              </div>
+              <div class="small text-body-secondary">${entry.detail || 'No detail provided.'}</div>
+            </div>
+            <div class="small text-body-secondary text-md-end">${entry.at || 'just now'}</div>
+          </div>
+        `;
+        return wrapper;
+      };
+
+      if (eventFeed && window.EventSource) {
+        const source = new EventSource("{{ url_for('event_stream', since=(recent_events[0].sequence if recent_events else 0)) }}");
+        source.addEventListener("camera-event", (event) => {
+          const empty = document.getElementById("dashboard-event-feed-empty");
+          if (empty) {
+            empty.remove();
+          }
+          const payload = JSON.parse(event.data);
+          eventFeed.prepend(renderEvent(payload));
+          while (eventFeed.children.length > 40) {
+            eventFeed.removeChild(eventFeed.lastElementChild);
+          }
+        });
+      }
+    })();
+  </script>
+{% endblock %}

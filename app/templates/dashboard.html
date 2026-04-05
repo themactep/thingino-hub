@@ -1,102 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
-  <section class="row row-cols-2 row-cols-lg-3 row-cols-xl-6 g-3 mb-4">
 
-    <article class="col">
-      <div class="card shadow-sm h-100">
-        <div class="card-body">
-          <div class="card-title d-flex justify-content-between gap-1">
-            <h3><img alt="Telegram logo" width="32" src="{{ url_for('static', filename='a/telegram.svg') }}"> Telegram</h3>
-            <span class="small {{ 'text-body-success' if status.telegram_ok else 'text-body-danger' }}">
-              {{ 'Polling OK' if status.telegram_ok else 'Polling Error' }}
-            </span>
-          </div>
-          <p class="text-body-secondary mb-1">Last successful poll: {{ status.telegram_last_ok or 'never' }}</p>
-          <p class="text-body-secondary mb-0">Last error: {{ status.telegram_last_error or 'none' }}</p>
-        </div>
-      </div>
-    </article>
-
-    <article class="col">
-      <div class="card shadow-sm h-100">
-        <div class="card-body">
-          <div class="card-title d-flex justify-content-between gap-1">
-            <h3><img alt="MQTT logo" width="32" src="{{ url_for('static', filename='a/mqtt.svg') }}"> MQTT</h3>
-            <span class="small {{ 'text-body-success' if status.mqtt_connected else 'text-body-danger' }}">
-              {{ 'Connected' if status.mqtt_connected else 'Disconnected' }}
-            </span>
-          </div>
-          <p class="text-body-secondary mb-1">Broker: {{ status.mqtt_host }}:{{ status.mqtt_port }}</p>
-          <p class="text-body-secondary mb-0">Last error: {{ status.mqtt_last_error or 'none' }}</p>
-        </div>
-      </div>
-    </article>
-
-    <article class="col">
-      <div class="card shadow-sm h-100">
-        <div class="card-body">
-          <div class="card-title d-flex justify-content-between gap-1">
-            <h3>Native API</h3>
-            <span class="small {{ 'text-body-success' if status.api_errors == 0 else 'text-body-danger' }}">
-              {{ 'Healthy' if status.api_errors == 0 else 'Needs Attention' }}
-            </span>
-          </div>
-          <p class="text-body-secondary mb-1">Cameras with endpoint: {{ status.api_known }}</p>
-          <p class="text-body-secondary mb-1">Probes refreshed: {{ status.api_ready }}</p>
-          <p class="text-body-secondary mb-0">Last successful refresh: {{ status.api_last_ok or 'never' }}</p>
-        </div>
-      </div>
-    </article>
-
-    <article class="col">
-      <div class="card shadow-sm h-100">
-        <div class="card-body">
-          <div class="card-title d-flex justify-content-between gap-1">
-            <h3><img alt="ONVIF logo" height="32" src="{{ url_for('static', filename='a/onvif.svg') }}"></h3>
-            <span class="small {{ 'text-body-success' if status.onvif_errors == 0 else 'text-body-danger' }}">
-              {{ 'Healthy' if status.onvif_errors == 0 else 'Needs Attention' }}
-            </span>
-          </div>
-          <p class="text-body-secondary mb-1">Cameras with endpoint: {{ status.onvif_known }}</p>
-          <p class="text-body-secondary mb-1">Details refreshed: {{ status.onvif_ready }}</p>
-          <p class="text-body-secondary mb-0">Last successful refresh: {{ status.onvif_last_ok or 'never' }}</p>
-        </div>
-      </div>
-    </article>
-
-    <article class="col">
-      <div class="card shadow-sm h-100">
-        <div class="card-body">
-          <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
-            <h3 class="card-title">Runtime</h3>
-            <form action="{{ url_for('reload_config') }}" method="post">
-              <button type="submit" class="btn btn-primary btn-sm">Reload Config</button>
-            </form>
-          </div>
-          <p class="text-body-secondary mb-1">Config path: {{ status.config_path }}</p>
-          <p class="text-body-secondary mb-0">Last reload: {{ status.last_reload_at or 'startup only' }}</p>
-        </div>
-      </div>
-    </article>
-
-    <article class="col">
-      <div class="card shadow-sm h-100">
-        <div class="card-body">
-          <div class="card-title d-flex justify-content-between gap-1">
-            <h3>History</h3>
-            <span class="small {{ 'text-body-success' if status.history_enabled else 'text-body-danger' }}">
-              {{ 'Enabled' if status.history_enabled else 'Disabled' }}
-            </span>
-          </div>
-          <p class="text-body-secondary mb-1">Recent action rows: {{ status.history_recent_actions_limit }}</p>
-          <p class="text-body-secondary mb-0 text-break">DB: {{ status.history_db_path or 'not configured' }}</p>
-        </div>
-      </div>
-    </article>
-
-  </section>
   <section class="card shadow-sm">
-
     <div class="card-body">
       <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3 mb-4">
         <h3>Cameras</h3>
@@ -109,6 +14,13 @@
       {% for camera in cameras %}
         <article class="col">
           <div class="card h-100 shadow-sm">
+            <div class="card-header py-2 px-3 d-flex justify-content-between align-items-center gap-2">
+              <div class="form-check mb-0">
+                <input class="form-check-input bulk-camera-checkbox" type="checkbox" name="camera_ids" value="{{ camera.camera_id }}" form="bulk-action-form" id="bulk_camera_{{ loop.index }}">
+                <label class="form-check-label small font-monospace" for="bulk_camera_{{ loop.index }}">{{ camera.camera_id }}</label>
+              </div>
+              <span class="badge rounded-pill {{ 'text-bg-success' if camera.status == 'online' else 'text-bg-danger' }}">{{ camera.status }}</span>
+            </div>
             <a class="ratio ratio-16x9 text-decoration-none bg-body-secondary{% if camera.preview_state != 'placeholder' and camera.status == 'online' %} dashboard-live-preview{% endif %}" href="{{ url_for('camera_detail', camera_id=camera.camera_id) }}">
             {% if camera.preview_state == 'placeholder' %}
               <img class="w-100 h-100 object-fit-cover rounded-top p-4" src="{{ url_for('static', filename='a/nostream.svg') }}" alt="No stream available" loading="lazy">
@@ -139,7 +51,6 @@
                   <p class="xx-small text-body-secondary mb-0">{{ camera.onvif_label }}</p>
                   {% endif %}
                 </div>
-                <span class="badge rounded-pill {{ 'text-bg-success' if camera.status == 'online' else 'text-bg-danger' }}">{{ camera.status }}</span>
               </div>
             </div>
           </div>
@@ -151,8 +62,104 @@
     </div>
   </section>
 
+{% if bulk_action_result %}
+  <section class="card shadow-sm mb-4">
+    <div class="card-body">
+      <div class="d-flex flex-column flex-md-row justify-content-between gap-3 mb-3">
+        <div>
+          <h3 class="h5 mb-1">Bulk Results</h3>
+          <p class="text-body-secondary mb-0">{{ bulk_action_result.action.replace('-', ' ').title() }} touched {{ bulk_action_result.total }} camera(s), with {{ bulk_action_result.error_count }} error(s).</p>
+        </div>
+        <div class="small text-body-secondary">Success: {{ bulk_action_result.success_count }} / Errors: {{ bulk_action_result.error_count }}</div>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-sm align-middle mb-0">
+          <thead>
+            <tr>
+              <th scope="col">Camera</th>
+              <th scope="col">Status</th>
+              <th scope="col">Detail</th>
+              <th scope="col" class="text-end">Retry</th>
+            </tr>
+          </thead>
+          <tbody>
+          {% for row in bulk_action_result.results %}
+            <tr>
+              <td class="font-monospace">{{ row.camera_id }}</td>
+              <td>
+                <span class="badge {{ 'text-bg-success' if row.status == 'success' else 'text-bg-danger' }}">{{ row.status }}</span>
+              </td>
+              <td class="text-body-secondary">{{ row.detail or 'No detail provided.' }}</td>
+              <td class="text-end">
+              {% if row.status != 'success' %}
+                <form action="{{ url_for('bulk_action') }}" method="post" class="d-inline">
+                  <input type="hidden" name="bulk_action" value="{{ bulk_action_result.action }}">
+                  <input type="hidden" name="camera_ids" value="{{ row.camera_id }}">
+                  <button type="submit" class="btn btn-outline-secondary btn-sm">Retry</button>
+                </form>
+              {% else %}
+                <span class="small text-body-secondary">Done</span>
+              {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+{% endif %}
+
+  <section class="row g-3 mb-4">
+    <article class="col-12 col-xl-5">
+      <div class="card shadow-sm h-100">
+        <div class="card-body">
+          <div class="d-flex flex-column flex-md-row justify-content-between gap-3 mb-3">
+            <div>
+              <h3 class="h5 mb-1">Fleet Actions</h3>
+              <p class="text-body-secondary mb-0">Select cameras below, then queue one surgical action across the batch.</p>
+            </div>
+            <button type="button" class="btn btn-outline-secondary btn-sm align-self-start" id="bulk-select-toggle">Select All</button>
+          </div>
+          <form action="{{ url_for('bulk_action') }}" method="post" id="bulk-action-form">
+            <div class="row g-3 align-items-end">
+              <div class="col-12 col-md-8">
+                <label class="form-label" for="bulk_action">Bulk action</label>
+                <select class="form-select" id="bulk_action" name="bulk_action">
+                  <option value="refresh-api">Refresh native API</option>
+                  <option value="refresh-onvif">Refresh ONVIF</option>
+                  <option value="refresh-snapshot">Refresh snapshot cache</option>
+                  <option value="rescan">Request camera re-registration</option>
+                  <option value="restart-streaming">Restart streaming service</option>
+                  <option value="start-streaming">Start streaming service</option>
+                  <option value="stop-streaming">Stop streaming service</option>
+                </select>
+              </div>
+              <div class="col-12 col-md-4 d-grid">
+                <button type="submit" class="btn btn-primary">Run on Selected</button>
+              </div>
+            </div>
+            <p class="small text-body-secondary mt-3 mb-0">Refresh actions are queued. Streaming actions reuse the same native service controls as the camera detail page.</p>
+          </form>
+        </div>
+      </div>
+    </article>
+  </section>
+
   <script>
     (() => {
+      const bulkToggle = document.getElementById("bulk-select-toggle");
+      if (bulkToggle) {
+        bulkToggle.addEventListener("click", () => {
+          const checkboxes = Array.from(document.querySelectorAll(".bulk-camera-checkbox"));
+          const shouldSelectAll = checkboxes.some((checkbox) => !checkbox.checked);
+          for (const checkbox of checkboxes) {
+            checkbox.checked = shouldSelectAll;
+          }
+          bulkToggle.textContent = shouldSelectAll ? "Clear Selection" : "Select All";
+        });
+      }
+
       const hoverCapable = window.matchMedia("(hover: hover)").matches;
       const liveCards = document.querySelectorAll(".dashboard-live-preview");
 

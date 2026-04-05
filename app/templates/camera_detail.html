@@ -22,7 +22,7 @@
     }
   </style>
 
-  <div data-camera-detail-page data-camera-id="{{ camera.camera_id }}" data-hydrate-url="{{ url_for('hydrate_camera_detail', camera_id=camera.camera_id) }}" data-payload-url="{{ url_for('camera_detail_state', camera_id=camera.camera_id) }}">
+  <div data-camera-detail-page data-camera-id="{{ camera.camera_id }}" data-hydrate-url="{{ url_for('hydrate_camera_detail', camera_id=camera.camera_id) }}" data-payload-url="{{ url_for('camera_detail_hydration_state', camera_id=camera.camera_id) }}">
     <div id="camera-action-feedback" class="alert d-none" role="status" aria-live="polite"></div>
   </div>
 
@@ -31,8 +31,26 @@
     <p class="text-body-secondary mb-0">{{ camera.hostname or 'unknown host' }}{% if camera.ip %} / {{ camera.ip }}{% endif %}{% if camera.api_device_model %} / {{ camera.api_device_model }}{% endif %}</p>
   </section>
 
-  <div class="row g-3 mb-4">
+      {% if not camera.hub_connected %}
+      <div class="border rounded p-3 mb-4">
+        <h3 class="h6 mb-2">Connect to Hub</h3>
+        <form action="{{ url_for('connect_camera', camera_id=camera.camera_id) }}" method="post" class="row g-3 align-items-end" data-async-form>
+          <div class="col-12 col-md-4">
+            <label class="form-label" for="connect_onvif_username">ONVIF username</label>
+            <input class="form-control" id="connect_onvif_username" type="text" name="onvif_username" value="{{ camera.override_onvif_username or camera.default_onvif_username }}" placeholder="thingino" autocomplete="off">
+          </div>
+          <div class="col-12 col-md-4">
+            <label class="form-label" for="connect_onvif_password">ONVIF password</label>
+            <input class="form-control" id="connect_onvif_password" type="password" name="onvif_password" value="{{ camera.override_onvif_password or camera.default_onvif_password }}" placeholder="thingino" autocomplete="off">
+          </div>
+          <div class="col-12 col-md-4 d-grid">
+            <button class="btn btn-primary" type="submit">Connect to Hub</button>
+          </div>
+        </form>
+      </div>
+      {% endif %}
 
+  <div class="row g-3 mb-4">
     <div class="col-12 col-xl-7">
       <div class="card h-100">
         <div class="card-body">
@@ -167,6 +185,7 @@
           <div class="border rounded p-3">
             <h3 class="h6 mb-3">Action Bar</h3>
             <div class="d-flex flex-wrap gap-2">
+              <button type="button" class="btn btn-outline-secondary btn-sm" data-async-action="{{ url_for('pair_camera', camera_id=camera.camera_id) }}" data-confirm="Install agent pairing for {{ camera.name }} over MQTT and restore the native API listener?">Pair</button>
               <button type="button" class="btn btn-outline-secondary btn-sm" data-async-action="{{ url_for('rescan_one', camera_id=camera.camera_id) }}">Rescan</button>
               <button type="button" class="btn btn-outline-secondary btn-sm" data-async-action="{{ url_for('refresh_snapshot', camera_id=camera.camera_id) }}">Snapshot</button>
               <button type="button" class="btn btn-outline-secondary btn-sm" data-async-action="{{ url_for('refresh_api', camera_id=camera.camera_id) }}">Native API</button>
@@ -196,6 +215,7 @@
           <h2 class="card-title h4">Camera Info</h2>
           <dl class="row mb-0">
             <dt>Camera ID</dt><dd>{{ camera.camera_id }}</dd>
+            <dt>Camera Image ID</dt><dd>{{ camera.camera_image_id or 'unknown' }}</dd>
             <dt>Hostname</dt><dd>{{ camera.hostname }}</dd>
             <dt>IP</dt><dd>{{ camera.ip or 'n/a' }}</dd>
             <dt>Snapshot URL</dt><dd>{{ camera.snapshot_url or 'not configured' }}</dd>
@@ -212,6 +232,13 @@
             <dt>Last Snapshot OK</dt><dd data-camera-field="last_snapshot_ok_at">{{ camera.last_snapshot_ok_at or 'never' }}</dd>
             <dt>Probe Error</dt><dd data-camera-field="last_probe_error">{{ camera.last_probe_error or 'none' }}</dd>
           </dl>
+        {% if camera.ota_upgrade_command %}
+          <div class="mt-4">
+            <h3 class="h6">Firmware Rebuild and OTA Command</h3>
+            <p class="small text-body-secondary mb-2">Copy and paste this into the firmware workspace.</p>
+            <textarea class="form-control font-monospace" rows="2" readonly>{{ camera.ota_upgrade_command }}</textarea>
+          </div>
+        {% endif %}
         </div>
       </div>
     </article>
@@ -531,7 +558,7 @@
       <h2>Camera Overrides</h2>
       <p>These values are stored in the hub YAML and override or supplement auto-registered metadata for this camera.</p>
       <p class="small text-body-secondary">Deleting a camera removes saved overrides, drops it from the current roster, and tries to clear the retained MQTT registration. A live camera can still re-register itself later.</p>
-      <div class="row g-4">
+     <div class="row g-4">
         <div class="col-12 col-lg-4">
           <form action="{{ url_for('camera_detail', camera_id=camera.camera_id) }}" method="post" class="border rounded p-3 h-100">
             <h3 class="h6 mb-3">General Overrides</h3>
@@ -900,8 +927,20 @@
         return response.json();
       }
 
-      function scheduleHydrationPoll(delayMs, remainingPolls) {
-        if (!payloadUrl || remainingPolls <= 0) {
+      function shouldScheduleHydrationPoll(refreshes, camera) {
+        const apiRefresh = String((refreshes && refreshes.api) || '').toLowerCase();
+        const onvifRefresh = String((refreshes && refreshes.onvif) || '').toLowerCase();
+        const workQueued = [apiRefresh, onvifRefresh].some((value) => value === 'scheduled' || value === 'already_running');
+        if (!workQueued) {
+          return false;
+        }
+        const apiUpdated = Boolean(camera && (camera.api_last_ok_at || camera.api_last_error));
+        const onvifUpdated = Boolean(camera && (camera.onvif_last_ok_at || camera.onvif_last_error));
+        return !(apiUpdated || onvifUpdated);
+      }
+
+      function scheduleHydrationPoll() {
+        if (!payloadUrl) {
           return;
         }
         if (hydratePollTimer !== null) {
@@ -917,8 +956,7 @@
           } catch (_error) {
             return;
           }
-          scheduleHydrationPoll(delayMs, remainingPolls - 1);
-        }, delayMs);
+        }, 1000);
       }
 
       async function hydrateCameraDetailOnLoad() {
@@ -930,7 +968,9 @@
           if (payload.camera) {
             updateCameraState(payload.camera);
           }
-          scheduleHydrationPoll(700, 4);
+          if (shouldScheduleHydrationPoll(payload.refreshes, payload.camera || null)) {
+            scheduleHydrationPoll();
+          }
         } catch (_error) {
           // Keep initial render silent and usable even if background hydration fails.
         }
@@ -1178,6 +1218,25 @@
         return `<span class="badge text-bg-secondary">${escapeHtml(status || 'unknown')}</span>`;
       }
 
+      function renderActionHistoryRow(entry) {
+        const signature = escapeHtml(JSON.stringify([
+          entry.at || '',
+          entry.action || '',
+          entry.status || '',
+          entry.source || '',
+          entry.detail || '',
+        ]));
+        return `
+          <tr data-native-action-signature="${signature}">
+            <td class="text-nowrap">${escapeHtml(entry.at || 'just now')}</td>
+            <td class="text-capitalize">${escapeHtml(entry.action || 'unknown')}</td>
+            <td>${renderActionBadge(entry.status)}</td>
+            <td class="text-nowrap text-body-secondary">${escapeHtml(entry.source || 'native_api')}</td>
+            <td class="text-break">${escapeHtml(entry.detail || 'n/a')}</td>
+          </tr>
+        `;
+      }
+
       function updateActionHistory(camera) {
         const container = document.getElementById('native-action-history');
         if (!container) {
@@ -1189,15 +1248,7 @@
           return;
         }
 
-        const rows = history.map((entry) => `
-          <tr>
-            <td class="text-nowrap">${escapeHtml(entry.at || 'just now')}</td>
-            <td class="text-capitalize">${escapeHtml(entry.action || 'unknown')}</td>
-            <td>${renderActionBadge(entry.status)}</td>
-            <td class="text-nowrap text-body-secondary">${escapeHtml(entry.source || 'native_api')}</td>
-            <td class="text-break">${escapeHtml(entry.detail || 'n/a')}</td>
-          </tr>
-        `).join('');
+        const rows = history.map((entry) => renderActionHistoryRow(entry)).join('');
 
         container.innerHTML = `
           <div class="table-responsive mb-4">
@@ -1215,6 +1266,34 @@
             </table>
           </div>
         `;
+      }
+
+      function prependLatestActionHistory(entry) {
+        const container = document.getElementById('native-action-history');
+        if (!container || !entry || typeof entry !== 'object') {
+          return;
+        }
+
+        const tbody = container.querySelector('#native-action-history-body');
+        if (!tbody) {
+          updateActionHistory({ native_action_history: [entry] });
+          return;
+        }
+
+        const signature = JSON.stringify([
+          entry.at || '',
+          entry.action || '',
+          entry.status || '',
+          entry.source || '',
+          entry.detail || '',
+        ]);
+        const currentFirst = tbody.querySelector('tr[data-native-action-signature]');
+        if (currentFirst && currentFirst.getAttribute('data-native-action-signature') === signature) {
+          return;
+        }
+
+        tbody.insertAdjacentHTML('afterbegin', renderActionHistoryRow(entry));
+        Array.from(tbody.querySelectorAll('tr')).slice(8).forEach((row) => row.remove());
       }
 
       function updateCameraState(camera) {
@@ -1257,6 +1336,8 @@
         }
         if ('native_action_history' in camera) {
           updateActionHistory(camera);
+        } else if ('native_action_history_latest' in camera) {
+          prependLatestActionHistory(camera.native_action_history_latest);
         }
       }
 

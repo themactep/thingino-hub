@@ -1,6 +1,7 @@
 import json
 import mimetypes
 import ssl
+import socket
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -17,6 +18,9 @@ class CameraApiClient:
         self.token = token
         self.timeout = timeout
 
+    def _control_timeout(self) -> int:
+        return max(self.timeout, 15)
+
     def get_device(self) -> dict[str, Any]:
         return self._json_request("GET", "/device")
 
@@ -30,12 +34,16 @@ class CameraApiClient:
         return self._json_request("GET", "/config")
 
     def patch_config(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return self._json_request("PATCH", "/config", payload=payload)
+        return self._json_request("PATCH", "/config", payload=payload, timeout=self._control_timeout())
 
     def control_service(self, service: str, operation: str) -> dict[str, Any]:
         normalized_service = urllib.parse.quote(str(service or "").strip().lower(), safe="")
         normalized_operation = urllib.parse.quote(str(operation or "").strip().lower(), safe="")
-        return self._json_request("POST", f"/actions/services/{normalized_service}/{normalized_operation}")
+        return self._json_request(
+            "POST",
+            f"/actions/services/{normalized_service}/{normalized_operation}",
+            timeout=self._control_timeout(),
+        )
 
     def restart_streaming_service(self) -> dict[str, Any]:
         return self.control_service("streaming", "restart")
@@ -54,6 +62,7 @@ class CameraApiClient:
             "POST",
             "/actions/privacy",
             payload={"enabled": enabled, "channel": channel},
+            timeout=self._control_timeout(),
         )
 
     def set_daynight_mode(self, mode: str) -> dict[str, Any]:
@@ -61,13 +70,14 @@ class CameraApiClient:
             "POST",
             "/actions/daynight",
             payload={"mode": str(mode).strip().lower()},
+            timeout=self._control_timeout(),
         )
 
     def record_clip(self, duration_seconds: int = 10, stream_id: int = 0, path: str = "") -> dict[str, Any]:
         payload: dict[str, Any] = {"duration_seconds": duration_seconds, "stream_id": stream_id}
         if path:
             payload["path"] = path
-        return self._json_request("POST", "/actions/record", payload=payload)
+        return self._json_request("POST", "/actions/record", payload=payload, timeout=self._control_timeout())
 
     def fetch_snapshot(self, stream_id: int = 0) -> tuple[bytes, str]:
         payload = {"stream_id": stream_id, "mode": "inline"}
@@ -88,8 +98,65 @@ class CameraApiClient:
             "state": self.get_state(),
         }
 
-    def _json_request(self, method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
-        body, _headers = self._request(method, path, payload=payload, accept="application/json")
+    def stream_events(self) -> Any:
+        url = f"{self.base_url}/events"
+        headers = {"Accept": "text/event-stream"}
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+
+        request = urllib.request.Request(url, headers=headers, method="GET")
+        open_kwargs: dict[str, Any] = {"timeout": max(self.timeout, 60)}
+        if urllib.parse.urlsplit(url).scheme == "https":
+            open_kwargs["context"] = ssl._create_unverified_context()
+
+        try:
+            with urllib.request.urlopen(request, **open_kwargs) as response:
+                event_name = "message"
+                data_lines: list[str] = []
+                while True:
+                    raw_line = response.readline()
+                    if raw_line == b"":
+                        break
+
+                    line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
+                    if not line:
+                        if data_lines:
+                            payload_text = "\n".join(data_lines)
+                            try:
+                                payload = json.loads(payload_text)
+                            except json.JSONDecodeError:
+                                payload = payload_text
+                            yield {
+                                "event": event_name or "message",
+                                "data": payload,
+                            }
+                        event_name = "message"
+                        data_lines = []
+                        continue
+
+                    if line.startswith(":"):
+                        continue
+                    if line.startswith("event:"):
+                        event_name = line.split(":", 1)[1].strip() or "message"
+                        continue
+                    if line.startswith("data:"):
+                        data_lines.append(line.split(":", 1)[1].lstrip())
+        except urllib.error.HTTPError as error:
+            body = error.read().decode("utf-8", errors="replace").strip()
+            detail = body or error.reason or f"HTTP {error.code}"
+            raise CameraApiError(f"GET /events failed: {detail}") from error
+        except (urllib.error.URLError, TimeoutError, socket.timeout) as error:
+            reason = getattr(error, "reason", None) or str(error)
+            raise CameraApiError(f"GET /events failed: {reason}") from error
+
+    def _json_request(
+        self,
+        method: str,
+        path: str,
+        payload: dict[str, Any] | None = None,
+        timeout: int | None = None,
+    ) -> dict[str, Any]:
+        body, _headers = self._request(method, path, payload=payload, accept="application/json", timeout=timeout)
         try:
             decoded = json.loads(body.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -104,6 +171,7 @@ class CameraApiClient:
         path: str,
         payload: dict[str, Any] | None = None,
         accept: str = "application/json",
+        timeout: int | None = None,
     ) -> tuple[bytes, Any]:
         url = f"{self.base_url}{path}"
         headers = {"Accept": accept}
@@ -116,7 +184,7 @@ class CameraApiClient:
 
         request = urllib.request.Request(url, data=data, headers=headers, method=method)
         try:
-            open_kwargs: dict[str, Any] = {"timeout": self.timeout}
+            open_kwargs: dict[str, Any] = {"timeout": self.timeout if timeout is None else timeout}
             if urllib.parse.urlsplit(url).scheme == "https":
                 open_kwargs["context"] = ssl._create_unverified_context()
             with urllib.request.urlopen(request, **open_kwargs) as response:

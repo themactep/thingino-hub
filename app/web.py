@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import threading
+import time
 import urllib.error
 import urllib.request
 from urllib.parse import urlsplit
@@ -18,6 +19,7 @@ if TYPE_CHECKING:
 
 
 LOG = logging.getLogger("telegrambothub.web")
+_BULK_ACTION_RESULT_SESSION_KEY = "dashboard_bulk_action_result"
 
 
 class WebServer:
@@ -63,6 +65,18 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
         requested_with = str(request.headers.get("X-Requested-With") or "").strip().lower()
         accept = str(request.headers.get("Accept") or "").strip().lower()
         return requested_with == "fetch" or "application/json" in accept
+
+    def _pop_bulk_action_result() -> dict[str, Any] | None:
+        value = session.pop(_BULK_ACTION_RESULT_SESSION_KEY, None)
+        return value if isinstance(value, dict) else None
+
+    def enrollment_request_payload() -> dict[str, str]:
+        return {
+            "ip": str(request.form.get("ip") or "").strip(),
+            "api_token": str(request.form.get("api_token") or "").strip(),
+            "onvif_username": str(request.form.get("onvif_username") or "").strip(),
+            "onvif_password": str(request.form.get("onvif_password") or ""),
+        }
 
     def camera_detail_payload(camera_id: str) -> dict[str, Any]:
         camera = hub.get_camera_for_ui(camera_id)
@@ -185,8 +199,44 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
             if field_name in camera
         }
 
+    def camera_detail_hydration_payload(camera_id: str) -> dict[str, Any]:
+        camera_payload = camera_fields_payload(
+            camera_id,
+            "status",
+            "preview_version",
+            "api_status",
+            "api_device_name",
+            "api_device_model",
+            "api_streamer",
+            "api_version",
+            "api_last_ok_at",
+            "api_last_error",
+            "onvif_manufacturer",
+            "onvif_model",
+            "onvif_firmware_version",
+            "onvif_serial_number",
+            "onvif_hardware_id",
+            "onvif_last_ok_at",
+            "onvif_last_error",
+            "last_registration_at",
+            "last_probe_at",
+            "last_snapshot_ok_at",
+            "last_probe_error",
+            "native_action_history",
+        )
+        return merge_camera_payloads(
+            camera_payload,
+            hub.get_camera_supported_controls_for_ui(camera_id),
+        )
+
     def action_history_delta_payload(camera_id: str) -> dict[str, Any]:
         return camera_fields_payload(camera_id, "native_action_history")
+
+    def latest_action_history_delta_payload(camera_id: str) -> dict[str, Any]:
+        history = camera_fields_payload(camera_id, "native_action_history").get("native_action_history") or []
+        if not history:
+            return {}
+        return {"native_action_history_latest": history[0]}
 
     def daynight_delta_payload(mode: str) -> dict[str, Any]:
         normalized_mode = str(mode or "").strip().lower() or "auto"
@@ -280,9 +330,62 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
     def dashboard() -> str:
         return render_template(
             "dashboard.html",
-            status=hub.snapshot_status(),
             cameras=hub.list_cameras_for_ui(),
+            bulk_action_result=_pop_bulk_action_result(),
         )
+
+    @app.get("/status")
+    def status_page() -> str:
+        return render_template(
+            "status.html",
+            status=hub.snapshot_status(),
+        )
+
+    @app.get("/events")
+    def events_page() -> str:
+        return render_template(
+            "events.html",
+            recent_events=hub.list_recent_events_for_ui(),
+        )
+
+    @app.get("/enroll")
+    def enroll_page() -> str:
+        return render_template("enroll.html")
+
+    @app.get("/api/events")
+    @app.get("/events/feed")
+    def api_events() -> Response:
+        limit = _optional_int_value(request.args.get("limit"), "events.limit")
+        return jsonify(
+            {
+                "ok": True,
+                "events": hub.list_recent_events_for_ui(limit=limit if limit is not None else 40),
+            }
+        )
+
+    @app.get("/events/stream")
+    def event_stream() -> Response:
+        last_sequence = _optional_int_value(request.args.get("since"), "events.since") or 0
+
+        def stream() -> Any:
+            current_sequence = last_sequence
+            yield ": connected\n\n"
+            while True:
+                next_sequence, events = hub.live_events_since(current_sequence)
+                if events:
+                    for entry in events:
+                        payload = json.dumps(entry, sort_keys=True)
+                        yield f"event: camera-event\ndata: {payload}\n\n"
+                    current_sequence = max(int(events[-1].get("sequence") or 0), next_sequence)
+                    continue
+                current_sequence = max(current_sequence, next_sequence)
+                yield f": ping {int(time.time())}\n\n"
+                time.sleep(2)
+
+        response = Response(stream(), mimetype="text/event-stream")
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Accel-Buffering"] = "no"
+        return response
 
     @app.route("/login", methods=["GET", "POST"])
     def login() -> str | Response:
@@ -366,6 +469,13 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
             "camera": camera_detail_payload(camera_id),
         })
 
+    @app.get("/camera/<camera_id>/hydrate-payload")
+    def camera_detail_hydration_state(camera_id: str) -> Response:
+        return jsonify({
+            "ok": True,
+            "camera": camera_detail_hydration_payload(camera_id),
+        })
+
     @app.get("/camera/<camera_id>/history")
     def camera_history(camera_id: str) -> str:
         limit = _optional_int_value(request.args.get("limit"), "history.limit")
@@ -419,6 +529,162 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
         except Exception as error:
             flash(f"Rescan failed: {error}", "error")
         return redirect(url_for("dashboard"))
+
+    @app.post("/bulk-action")
+    def bulk_action() -> Response:
+        selected_ids = request.form.getlist("camera_ids")
+        action = str(request.form.get("bulk_action") or "").strip()
+        try:
+            result = hub.perform_bulk_action(selected_ids, action)
+            message = f"{result['action'].replace('-', ' ').title()} finished for {result['success_count']} of {result['total']} camera(s)."
+            if wants_json_response():
+                return jsonify({"ok": result["error_count"] == 0, "message": message, "result": result})
+            session[_BULK_ACTION_RESULT_SESSION_KEY] = result
+            flash(message, "success" if result["error_count"] == 0 else "error")
+        except Exception as error:
+            if wants_json_response():
+                response = jsonify({"ok": False, "message": str(error)})
+                response.status_code = 400
+                return response
+            session.pop(_BULK_ACTION_RESULT_SESSION_KEY, None)
+            flash(f"Bulk action failed: {error}", "error")
+        return redirect(url_for("dashboard"))
+
+    @app.post("/enroll")
+    def enroll_camera() -> Response:
+        enrollment = enrollment_request_payload()
+        try:
+            result = hub.connect_camera(enrollment)
+            message = f"Connected {result['camera_id']} to the hub."
+            if wants_json_response():
+                return jsonify({"ok": True, "message": message, "result": result})
+            flash(message, "success")
+            return redirect(url_for("camera_detail", camera_id=result["camera_id"]))
+        except Exception as error:
+            if wants_json_response():
+                response = jsonify({"ok": False, "message": str(error)})
+                response.status_code = 400
+                return response
+            flash(f"Enrollment failed: {error}", "error")
+            return redirect(url_for("dashboard"))
+
+    @app.post("/connect/<camera_id>")
+    def connect_camera(camera_id: str) -> Response:
+        try:
+            camera = hub.get_camera_for_ui(camera_id)
+            enrollment = {
+                "camera_id": camera_id,
+                "ip": str(camera.get("ip") or "").strip(),
+                "onvif_username": str(request.form.get("onvif_username") or "").strip(),
+                "onvif_password": str(request.form.get("onvif_password") or ""),
+            }
+            result = hub.connect_camera(enrollment)
+            category = "warning" if str(result.get("status") or "").strip().lower() == "warning" else "success"
+            detail = str(result.get("status_detail") or "").strip()
+            message = detail or f"Connected {camera_id} to the hub."
+            return action_response(
+                message,
+                category,
+                url_for("camera_detail", camera_id=camera_id),
+                camera_id=camera_id,
+            )
+        except Exception as error:
+            return action_response(
+                f"Connect failed for {camera_id}: {error}",
+                "error",
+                url_for("camera_detail", camera_id=camera_id),
+                camera_id=camera_id,
+                status_code=500,
+            )
+
+    @app.post("/enroll/probe")
+    def probe_enrollment() -> Response:
+        enrollment = enrollment_request_payload()
+        try:
+            result = hub.probe_camera_enrollment(enrollment)
+            return jsonify({
+                "ok": True,
+                "message": "Enrollment probe finished.",
+                "result": result,
+            })
+        except Exception as error:
+            response = jsonify({
+                "ok": False,
+                "message": str(error),
+            })
+            response.status_code = 400
+            return response
+
+    @app.post("/enroll/pairing-bundle")
+    def pairing_bundle() -> Response:
+        enrollment = enrollment_request_payload()
+        try:
+            result = hub.generate_pairing_bundle(enrollment)
+            return jsonify({
+                "ok": True,
+                "message": "Pairing bundle prepared.",
+                "result": result,
+            })
+        except Exception as error:
+            response = jsonify({
+                "ok": False,
+                "message": str(error),
+            })
+            response.status_code = 400
+            return response
+
+    @app.post("/enroll/pairing-install")
+    def pairing_install() -> Response:
+        enrollment = enrollment_request_payload()
+        try:
+            result = hub.install_pairing_bundle_via_mqtt(enrollment)
+            message = "Pairing installed over MQTT."
+            if result.get("status") == "warning":
+                message = "Pairing install was published over MQTT, but camera confirmation timed out."
+            return jsonify({
+                "ok": True,
+                "message": message,
+                "result": result,
+            })
+        except Exception as error:
+            response = jsonify({
+                "ok": False,
+                "message": str(error),
+            })
+            response.status_code = 400
+            return response
+
+    @app.post("/pair/<camera_id>")
+    def pair_camera(camera_id: str) -> Response:
+        try:
+            camera = hub.get_camera_for_ui(camera_id)
+            enrollment = {
+                "camera_id": camera_id,
+                "ip": str(camera.get("ip") or "").strip(),
+            }
+            result = hub.install_pairing_bundle_via_mqtt(enrollment)
+            status = str(result.get("status") or "success").strip().lower()
+            if status == "warning":
+                return action_response(
+                    f"Pairing install was published for {camera_id}, but the camera did not confirm before the timeout.",
+                    "warning",
+                    url_for("camera_detail", camera_id=camera_id),
+                    camera_id=camera_id,
+                )
+            return action_response(
+                f"Pairing installed for {camera_id}; native API should come back after the agent restarts.",
+                "success",
+                url_for("camera_detail", camera_id=camera_id),
+                camera_id=camera_id,
+            )
+        except Exception as error:
+            return action_response(
+                f"Pairing failed for {camera_id}: {error}",
+                "error",
+                url_for("camera_detail", camera_id=camera_id),
+                camera_id=camera_id,
+                status_code=500,
+            )
 
     @app.post("/rescan/<camera_id>")
     def rescan_one(camera_id: str) -> Response:
@@ -525,7 +791,7 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
                 f"{service_name.replace('_', ' ').title()} {operation} requested.",
                 "success",
                 url_for("camera_detail", camera_id=camera_id),
-                camera_payload=action_history_delta_payload(camera_id),
+                camera_payload=latest_action_history_delta_payload(camera_id),
             )
         except Exception as error:
             return action_response(
@@ -607,7 +873,7 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
                 url_for("camera_detail", camera_id=camera_id),
                 camera_payload=merge_camera_payloads(
                     supported_controls_delta_from_payload(payload),
-                    action_history_delta_payload(camera_id),
+                    latest_action_history_delta_payload(camera_id),
                 ),
             )
         except Exception as error:
@@ -639,7 +905,7 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
                 url_for("camera_detail", camera_id=camera_id),
                 camera_payload=merge_camera_payloads(
                     supported_controls_delta_payload(request.form),
-                    action_history_delta_payload(camera_id),
+                    latest_action_history_delta_payload(camera_id),
                 ),
             )
         except Exception as error:

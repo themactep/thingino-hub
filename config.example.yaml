@@ -26,6 +26,10 @@ ui:
   snapshot_heartbeat_timeout_seconds: 5
   snapshot_cache_stale_after_seconds: 3600
 
+defaults:
+  onvif_username: "thingino"
+  onvif_password: "thingino"
+
 history:
   enabled: true
   path: ""

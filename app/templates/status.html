@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block content %}
+  <section class="mb-4 d-flex flex-column flex-lg-row justify-content-between align-items-lg-end gap-3">
+    <div>
+      <h1 class="h3 mb-1">System Status</h1>
+      <p class="text-body-secondary mb-0">Telegram, MQTT, API refresh health, runtime state, and history storage live here instead of crowding the dashboard.</p>
+    </div>
+    <form action="{{ url_for('reload_config') }}" method="post">
+      <button type="submit" class="btn btn-primary">Reload Config</button>
+    </form>
+  </section>
+
+  <section class="row row-cols-1 row-cols-md-2 row-cols-xl-3 g-3 mb-4">
+
+    <article class="col">
+      <div class="card shadow-sm h-100">
+        <div class="card-body">
+          <div class="card-title d-flex justify-content-between gap-1">
+            <h3><img alt="Telegram logo" width="32" src="{{ url_for('static', filename='a/telegram.svg') }}"> Telegram</h3>
+            <span class="small {{ 'text-body-success' if status.telegram_ok else 'text-body-danger' }}">
+              {{ 'Polling OK' if status.telegram_ok else 'Polling Error' }}
+            </span>
+          </div>
+          <p class="text-body-secondary mb-1">Last successful poll: {{ status.telegram_last_ok or 'never' }}</p>
+          <p class="text-body-secondary mb-0">Last error: {{ status.telegram_last_error or 'none' }}</p>
+        </div>
+      </div>
+    </article>
+
+    <article class="col">
+      <div class="card shadow-sm h-100">
+        <div class="card-body">
+          <div class="card-title d-flex justify-content-between gap-1">
+            <h3><img alt="MQTT logo" width="32" src="{{ url_for('static', filename='a/mqtt.svg') }}"> MQTT</h3>
+            <span class="small {{ 'text-body-success' if status.mqtt_connected else 'text-body-danger' }}">
+              {{ 'Connected' if status.mqtt_connected else 'Disconnected' }}
+            </span>
+          </div>
+          <p class="text-body-secondary mb-1">Broker: {{ status.mqtt_host }}:{{ status.mqtt_port }}</p>
+          <p class="text-body-secondary mb-0">Last error: {{ status.mqtt_last_error or 'none' }}</p>
+        </div>
+      </div>
+    </article>
+
+    <article class="col">
+      <div class="card shadow-sm h-100">
+        <div class="card-body">
+          <div class="card-title d-flex justify-content-between gap-1">
+            <h3>Native API</h3>
+            <span class="small {{ 'text-body-success' if status.api_errors == 0 else 'text-body-danger' }}">
+              {{ 'Healthy' if status.api_errors == 0 else 'Needs Attention' }}
+            </span>
+          </div>
+          <p class="text-body-secondary mb-1">Cameras with endpoint: {{ status.api_known }}</p>
+          <p class="text-body-secondary mb-1">Probes refreshed: {{ status.api_ready }}</p>
+          <p class="text-body-secondary mb-0">Last successful refresh: {{ status.api_last_ok or 'never' }}</p>
+        </div>
+      </div>
+    </article>
+
+    <article class="col">
+      <div class="card shadow-sm h-100">
+        <div class="card-body">
+          <div class="card-title d-flex justify-content-between gap-1">
+            <h3><img alt="ONVIF logo" height="32" src="{{ url_for('static', filename='a/onvif.svg') }}"></h3>
+            <span class="small {{ 'text-body-success' if status.onvif_errors == 0 else 'text-body-danger' }}">
+              {{ 'Healthy' if status.onvif_errors == 0 else 'Needs Attention' }}
+            </span>
+          </div>
+          <p class="text-body-secondary mb-1">Cameras with endpoint: {{ status.onvif_known }}</p>
+          <p class="text-body-secondary mb-1">Details refreshed: {{ status.onvif_ready }}</p>
+          <p class="text-body-secondary mb-0">Last successful refresh: {{ status.onvif_last_ok or 'never' }}</p>
+        </div>
+      </div>
+    </article>
+
+    <article class="col">
+      <div class="card shadow-sm h-100">
+        <div class="card-body">
+          <div class="card-title d-flex justify-content-between gap-1">
+            <h3>Runtime</h3>
+          </div>
+          <p class="text-body-secondary mb-1">Config path: {{ status.config_path }}</p>
+          <p class="text-body-secondary mb-0">Last reload: {{ status.last_reload_at or 'startup only' }}</p>
+        </div>
+      </div>
+    </article>
+
+    <article class="col">
+      <div class="card shadow-sm h-100">
+        <div class="card-body">
+          <div class="card-title d-flex justify-content-between gap-1">
+            <h3>History</h3>
+            <span class="small {{ 'text-body-success' if status.history_enabled else 'text-body-danger' }}">
+              {{ 'Enabled' if status.history_enabled else 'Disabled' }}
+            </span>
+          </div>
+          <p class="text-body-secondary mb-1">Recent action rows: {{ status.history_recent_actions_limit }}</p>
+          <p class="text-body-secondary mb-0 text-break">DB: {{ status.history_db_path or 'not configured' }}</p>
+        </div>
+      </div>
+    </article>
+
+  </section>
+{% endblock %}

@@ -1,0 +1,240 @@
+{% extends "base.html" %}
+{% block content %}
+  <section class="mb-4 d-flex flex-column flex-lg-row justify-content-between align-items-lg-end gap-3">
+    <div>
+      <h1 class="h3 mb-1">Enroll Camera</h1>
+      <p class="text-body-secondary mb-0">Autodiscovered cameras should only need an IP and valid credentials. The primary path below repairs pairing, saves the generated API token, and hydrates the hub in one step.</p>
+    </div>
+    <div class="small text-body-secondary">The native API uses a bearer token. The camera web UI and ONVIF use basic auth and default to <span class="font-monospace">thingino / thingino</span> when you leave them blank.</div>
+  </section>
+
+  <section class="card shadow-sm mb-4">
+    <div class="card-body">
+      <form action="{{ url_for('enroll_camera') }}" method="post" id="enroll-camera-form">
+        <div class="row g-3">
+          <div class="col-12 col-md-6">
+            <label class="form-label" for="enroll_ip">IP</label>
+            <input class="form-control" id="enroll_ip" type="text" name="ip" placeholder="192.168.88.160">
+          </div>
+          <div class="col-12 col-md-6">
+            <label class="form-label" for="enroll_api_token">API token</label>
+            <input class="form-control font-monospace" id="enroll_api_token" type="text" name="api_token" placeholder="optional bearer token">
+          </div>
+          <div class="col-12 col-md-6">
+            <label class="form-label" for="enroll_onvif_username">ONVIF username</label>
+            <input class="form-control" id="enroll_onvif_username" type="text" name="onvif_username" placeholder="thingino">
+          </div>
+          <div class="col-12 col-md-6">
+            <label class="form-label" for="enroll_onvif_password">ONVIF password</label>
+            <input class="form-control" id="enroll_onvif_password" type="password" name="onvif_password" placeholder="thingino">
+          </div>
+        </div>
+        <div class="d-flex flex-wrap gap-2 mt-3">
+          <button type="submit" class="btn btn-primary">Connect Camera</button>
+          <button type="button" class="btn btn-outline-secondary" id="enroll-pairing-install-button">Repair Pairing</button>
+          <button type="button" class="btn btn-outline-secondary" id="enroll-probe-button">Probe</button>
+          <button type="button" class="btn btn-outline-secondary" id="enroll-pairing-button">Show Pairing Details</button>
+        </div>
+      </form>
+      <div class="border rounded p-3 mt-3 d-none" id="enroll-pairing-result" aria-live="polite"></div>
+      <div class="border rounded p-3 mt-3 d-none" id="enroll-probe-result" aria-live="polite"></div>
+    </div>
+  </section>
+
+  <script>
+    (() => {
+      const enrollForm = document.getElementById("enroll-camera-form");
+      const enrollPairingButton = document.getElementById("enroll-pairing-button");
+      const enrollPairingInstallButton = document.getElementById("enroll-pairing-install-button");
+      const enrollPairingResult = document.getElementById("enroll-pairing-result");
+      const enrollProbeButton = document.getElementById("enroll-probe-button");
+      const enrollProbeResult = document.getElementById("enroll-probe-result");
+      if (enrollForm && enrollPairingButton && enrollPairingInstallButton && enrollPairingResult && enrollProbeButton && enrollProbeResult) {
+        const applyPairingDefaults = (result) => {
+          const apiTokenInput = document.getElementById("enroll_api_token");
+          if (apiTokenInput && result.api_token) {
+            apiTokenInput.value = result.api_token;
+          }
+        };
+
+        const renderPairingError = (title, message) => {
+          enrollPairingResult.classList.remove("d-none", "border-success", "border-warning");
+          enrollPairingResult.classList.add("border-danger");
+          enrollPairingResult.innerHTML = `<div class="fw-semibold text-danger mb-1">${title}</div><div class="small text-body-secondary">${message}</div>`;
+        };
+
+        const renderPairingResult = (payload) => {
+          const result = payload.result || {};
+          applyPairingDefaults(result);
+
+          const bootstrapJson = result.bootstrap_json || "{}";
+          const commands = Array.isArray(result.commands) ? result.commands.join('\n') : "";
+          const bootstrapInstallCommands = Array.isArray(result.bootstrap_install_commands)
+            ? result.bootstrap_install_commands.join('\n')
+            : "";
+          const mqtt = result.mqtt || {};
+          const status = result.status || "success";
+          const borderClass = status === "warning" ? "border-warning" : "border-success";
+          const installSummary = mqtt.published
+            ? (mqtt.reply_received
+              ? (mqtt.reply_text || payload.message || "Camera confirmed the install.")
+              : (result.status_detail || payload.message || "MQTT publish succeeded; camera confirmation timed out."))
+            : "Use the commands below on the camera.";
+          const installBadgeClass = status === "warning" ? "text-bg-warning" : "text-bg-success";
+          const installLabel = mqtt.published ? "MQTT install" : "Pairing bundle";
+          enrollPairingResult.classList.remove("d-none", "border-danger", "border-success", "border-warning");
+          enrollPairingResult.classList.add(borderClass);
+          enrollPairingResult.innerHTML = `
+            <div class="d-flex flex-column flex-md-row justify-content-between gap-2 mb-3">
+              <div>
+                <div class="fw-semibold">Pairing bundle for ${result.camera_id || 'camera'}</div>
+                <div class="small text-body-secondary">Native API will use ${result.api_base_url || 'the configured API URL'} with the generated bearer token.</div>
+              </div>
+              <div class="small text-body-secondary">${payload.message}</div>
+            </div>
+            <div class="mb-3 d-flex flex-wrap align-items-center gap-2 small">
+              <span class="badge ${installBadgeClass}">${installLabel}</span>
+              <span class="text-body-secondary">${installSummary}</span>
+            </div>
+            <div class="row g-3 small">
+              <div class="col-12 col-lg-6">
+                <div class="fw-semibold mb-1">Generated token</div>
+                <div class="font-monospace text-break">${result.api_token || ''}</div>
+              </div>
+              <div class="col-12 col-lg-6">
+                <div class="fw-semibold mb-1">API base URL</div>
+                <div class="font-monospace text-break">${result.api_base_url || ''}</div>
+              </div>
+            </div>
+            <div class="mt-3">
+              <div class="fw-semibold mb-1">Bootstrap JSON for /etc/thingino-agent-bootstrap.json</div>
+              <pre class="small bg-body-tertiary border rounded p-3 mb-0"><code>${bootstrapJson}</code></pre>
+            </div>
+            <div class="mt-3 row g-3">
+              <div class="col-12 col-lg-6">
+                <div class="fw-semibold mb-1">Immediate device commands</div>
+                <pre class="small bg-body-tertiary border rounded p-3 mb-0"><code>${commands}</code></pre>
+              </div>
+              <div class="col-12 col-lg-6">
+                <div class="fw-semibold mb-1">Persistent bootstrap install</div>
+                <pre class="small bg-body-tertiary border rounded p-3 mb-0"><code>${bootstrapInstallCommands}</code></pre>
+              </div>
+            </div>
+          `;
+        };
+
+        const requestPairingPayload = async (button, pendingLabel, endpoint, failureTitle) => {
+          const formData = new FormData(enrollForm);
+          const idleLabel = button.textContent;
+          button.disabled = true;
+          button.textContent = pendingLabel;
+          try {
+            const response = await fetch(endpoint, {
+              method: "POST",
+              body: formData,
+              headers: {
+                "Accept": "application/json",
+                "X-Requested-With": "fetch",
+              },
+            });
+            const payload = await response.json();
+            if (!payload.ok) {
+              renderPairingError(failureTitle, payload.message || 'Unknown error');
+              return;
+            }
+            renderPairingResult(payload);
+          } catch (error) {
+            renderPairingError(failureTitle, error);
+          } finally {
+            button.disabled = false;
+            button.textContent = idleLabel;
+          }
+        };
+
+        enrollPairingButton.addEventListener("click", async () => {
+          await requestPairingPayload(
+            enrollPairingButton,
+            "Preparing...",
+            "{{ url_for('pairing_bundle') }}",
+            "Pairing bundle failed",
+          );
+        });
+
+        enrollPairingInstallButton.addEventListener("click", async () => {
+          await requestPairingPayload(
+            enrollPairingInstallButton,
+            "Installing...",
+            "{{ url_for('pairing_install') }}",
+            "MQTT pairing install failed",
+          );
+        });
+
+        enrollProbeButton.addEventListener("click", async () => {
+          const formData = new FormData(enrollForm);
+          enrollProbeButton.disabled = true;
+          enrollProbeButton.textContent = "Probing...";
+          try {
+            const response = await fetch("{{ url_for('probe_enrollment') }}", {
+              method: "POST",
+              body: formData,
+              headers: {
+                "Accept": "application/json",
+                "X-Requested-With": "fetch",
+              },
+            });
+            const payload = await response.json();
+            enrollProbeResult.classList.remove("d-none", "border-success", "border-danger", "border-warning");
+            if (!payload.ok) {
+              enrollProbeResult.classList.add("border-danger");
+              enrollProbeResult.innerHTML = `<div class="fw-semibold text-danger mb-1">Probe failed</div><div class="small text-body-secondary">${payload.message || 'Unknown error'}</div>`;
+              return;
+            }
+
+            const result = payload.result || {};
+            const conflicts = result.conflicts || {};
+            const api = result.api || {};
+            const onvif = result.onvif || {};
+            const conflictLines = [];
+            if (conflicts.camera_id) {
+              conflictLines.push(`Camera ID already exists: ${conflicts.camera_id}`);
+            }
+            if (conflicts.ip) {
+              conflictLines.push(`IP already belongs to ${conflicts.ip}`);
+            }
+            const statusClass = conflicts.ip ? "border-danger" : conflictLines.length ? "border-warning" : "border-success";
+            enrollProbeResult.classList.add(statusClass);
+            enrollProbeResult.innerHTML = `
+              <div class="d-flex flex-column flex-md-row justify-content-between gap-2 mb-2">
+                <div class="fw-semibold">Probe summary for ${result.camera_id || 'camera'}</div>
+                <div class="small text-body-secondary">${payload.message}</div>
+              </div>
+              <div class="row g-3 small">
+                <div class="col-12 col-md-6">
+                  <div class="fw-semibold mb-1">Native API</div>
+                  <div>${api.configured ? (api.ok ? 'Reachable' : 'Configured but not reachable') : 'Not configured'}</div>
+                  <div class="text-body-secondary">${api.base_url || 'No API URL'}</div>
+                  <div class="text-body-secondary">${api.device_name || api.device_model || api.streamer ? [api.device_name, api.device_model, api.streamer].filter(Boolean).join(' / ') : (api.error || 'No device details')}</div>
+                </div>
+                <div class="col-12 col-md-6">
+                  <div class="fw-semibold mb-1">ONVIF</div>
+                  <div>${onvif.configured ? (onvif.ok ? 'Reachable' : 'Configured but not reachable') : 'Not configured'}</div>
+                  <div class="text-body-secondary">${onvif.endpoint || 'No ONVIF endpoint'}</div>
+                  <div class="text-body-secondary">${onvif.manufacturer || onvif.model ? [onvif.manufacturer, onvif.model, onvif.firmware_version].filter(Boolean).join(' / ') : (onvif.error || 'No ONVIF details')}</div>
+                </div>
+              </div>
+              <div class="small text-body-secondary mt-2">Snapshot URL: ${result.snapshot_url || 'not derived'}</div>
+              ${conflictLines.length ? `<div class="small mt-2 ${conflicts.ip ? 'text-danger' : 'text-warning'}">${conflictLines.join(' | ')}</div>` : ''}
+            `;
+          } catch (error) {
+            enrollProbeResult.classList.remove("d-none", "border-success", "border-warning");
+            enrollProbeResult.classList.add("border-danger");
+            enrollProbeResult.innerHTML = `<div class="fw-semibold text-danger mb-1">Probe failed</div><div class="small text-body-secondary">${error}</div>`;
+          } finally {
+            enrollProbeButton.disabled = false;
+            enrollProbeButton.textContent = "Probe";
+          }
+        });
+      }
+    })();
+  </script>
+{% endblock %}

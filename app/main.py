@@ -181,11 +181,16 @@ class Hub:
         self.api_refreshing: set[str] = set()
         self.snapshot_refreshing: set[str] = set()
         self.supported_controls_refreshing: set[str] = set()
+        self.event_streaming: set[str] = set()
         self.pending_by_request: dict[str, dict[str, Any]] = {}
+        self.command_reply_timeout_seconds = 5.0
         self.last_chat_by_camera: dict[str, int] = {}
         self.native_action_history_by_camera: dict[str, list[dict[str, Any]]] = {}
         self.optimistic_supported_controls_by_camera: dict[str, tuple[float, dict[str, Any]]] = {}
         self.supported_controls_cache_by_camera: dict[str, dict[str, Any]] = {}
+        self.live_events: list[dict[str, Any]] = []
+        self.live_event_limit = 200
+        self.live_event_sequence = 0
         self.history_store: HistoryStore | None = None
         self.history_db_path = ""
         self.history_enabled = True
@@ -226,7 +231,11 @@ class Hub:
         base_url = self._camera_api_base_url(camera)
         if not base_url:
             raise RuntimeError(f"Native API base URL is not configured for {camera.name}")
-        return CameraApiClient(base_url, token=self._camera_api_token(camera), timeout=self.snapshot_heartbeat_timeout_seconds)
+        return CameraApiClient(
+            base_url,
+            token=self._camera_api_token(camera),
+            timeout=max(self.snapshot_heartbeat_timeout_seconds, 10),
+        )
 
     def _load_cameras(self) -> dict[str, Camera]:
         cameras = {}
@@ -410,6 +419,9 @@ class Hub:
             self.snapshot_heartbeat_interval_seconds = max(0, int(config.get("ui", {}).get("snapshot_heartbeat_interval_seconds", 60)))
             self.snapshot_heartbeat_timeout_seconds = max(1, int(config.get("ui", {}).get("snapshot_heartbeat_timeout_seconds", 5)))
             self.snapshot_cache_stale_after_seconds = max(0, int(config.get("ui", {}).get("snapshot_cache_stale_after_seconds", 3600)))
+            defaults_cfg = config.get("defaults") or {}
+            self.default_onvif_username = str(defaults_cfg.get("onvif_username") or DEFAULT_THINGINO_USERNAME).strip()
+            self.default_onvif_password = str(defaults_cfg.get("onvif_password") or DEFAULT_THINGINO_PASSWORD)
             self._configure_history_store(config)
 
             if self.mqtt_client is not None:
@@ -427,6 +439,7 @@ class Hub:
         self._schedule_onvif_refresh_for_all()
         self._schedule_api_refresh_for_all()
         self._schedule_supported_controls_refresh_for_all()
+        self._schedule_event_stream_for_all()
 
     def _configure_history_store(self, config: dict[str, Any]) -> None:
         history_cfg = config.get("history") or {}
@@ -567,9 +580,19 @@ class Hub:
             )
         self._persist_state()
         LOG.info("Camera registration: id=%s name=%s status=%s", camera_id, self.cameras[camera_id].name, status)
+        detail = resolved_name if not ip else f"{resolved_name} @ {ip}"
+        self._record_history_action(
+            camera_id,
+            "registration",
+            "success",
+            detail,
+            recorded_at=last_registration_at,
+            source="mqtt_registration",
+        )
         self._schedule_api_refresh(camera_id)
         self._schedule_onvif_refresh(camera_id)
         self._schedule_supported_controls_refresh(camera_id)
+        self._schedule_event_stream(camera_id)
 
     def _camera_with_runtime_state(self, camera: Camera, existing: Camera | None) -> Camera:
         if existing is None:
@@ -608,6 +631,154 @@ class Hub:
             camera_ids = list(self.cameras)
         for camera_id in camera_ids:
             self._schedule_supported_controls_refresh(camera_id)
+
+    def _schedule_event_stream_for_all(self) -> None:
+        with self.state_lock:
+            camera_ids = list(self.cameras)
+        for camera_id in camera_ids:
+            self._schedule_event_stream(camera_id)
+
+    def _schedule_event_stream(self, camera_id: str) -> bool:
+        resolved = self._resolve_camera_id(camera_id) or camera_id.strip().lower()
+        with self.state_lock:
+            camera = self.cameras.get(resolved)
+            if camera is None:
+                return False
+            if not self._camera_api_base_url(camera):
+                return False
+            if resolved in self.event_streaming:
+                return False
+            self.event_streaming.add(resolved)
+        worker = threading.Thread(
+            target=self._event_stream_worker,
+            args=(resolved,),
+            name=f"telegrambothub-events-{resolved[:8]}",
+            daemon=True,
+        )
+        worker.start()
+        return True
+
+    def _event_stream_worker(self, camera_id: str) -> None:
+        last_error = ""
+        try:
+            while not self.stop_event.is_set():
+                with self.state_lock:
+                    camera = self.cameras.get(camera_id)
+                if camera is None or not self._camera_api_base_url(camera):
+                    return
+
+                try:
+                    client = self._camera_api_client(camera)
+                    for stream_event in client.stream_events():
+                        if self.stop_event.is_set():
+                            return
+                        last_error = ""
+                        self._handle_camera_stream_event(camera_id, stream_event)
+                except Exception as error:
+                    message = str(error).strip()
+                    if message and message != last_error:
+                        self._record_history_action(
+                            camera_id,
+                            "event_stream",
+                            "error",
+                            message,
+                            source="hub",
+                        )
+                        last_error = message
+                    if self.stop_event.wait(5):
+                        return
+                else:
+                    if self.stop_event.wait(1):
+                        return
+        finally:
+            with self.state_lock:
+                self.event_streaming.discard(camera_id)
+
+    def _handle_camera_stream_event(self, camera_id: str, stream_event: dict[str, Any]) -> None:
+        event_name = str(stream_event.get("event") or "message").strip() or "message"
+        if event_name == "keepalive":
+            return
+
+        payload = stream_event.get("data")
+        if not isinstance(payload, dict):
+            payload = {"message": str(payload or "").strip()}
+        recorded_at = self._coerce_int(payload.get("timestamp")) or int(time.time())
+        status = self._camera_stream_event_status(event_name, payload)
+        detail = self._camera_stream_event_detail(event_name, payload)
+        payload_summary = json.dumps(payload, sort_keys=True)[:500]
+        self._record_history_action(
+            camera_id,
+            event_name.replace(".", "_"),
+            status,
+            detail,
+            recorded_at=recorded_at,
+            source="camera_event",
+            payload_summary=payload_summary,
+        )
+
+        if event_name == "hello":
+            self._schedule_api_refresh(camera_id)
+            self._schedule_onvif_refresh(camera_id)
+            self._schedule_supported_controls_refresh(camera_id)
+            return
+        if event_name in {"state.changed", "streamer.restarted"}:
+            self._schedule_api_refresh(camera_id)
+            self._schedule_supported_controls_refresh(camera_id)
+
+    def _camera_stream_event_status(self, event_name: str, payload: dict[str, Any]) -> str:
+        status = str(payload.get("status") or "").strip().lower()
+        if status in {"success", "error", "warning", "info", "offline", "online", "degraded"}:
+            if status == "degraded":
+                return "warning"
+            if status in {"online", "offline"}:
+                return "info"
+            return status
+        if event_name == "error":
+            return "error"
+        if event_name.endswith("warning"):
+            return "warning"
+        if event_name in {"motion.started", "motion.stopped", "streamer.restarted", "record.completed", "hello"}:
+            return "success"
+        return "info"
+
+    def _camera_stream_event_detail(self, event_name: str, payload: dict[str, Any]) -> str:
+        if event_name == "hello":
+            parts = [str(payload.get("backend") or "").strip(), str(payload.get("stream") or "").strip()]
+            detail = " / ".join(part for part in parts if part)
+            return detail or "Camera event stream connected"
+        if event_name == "motion.started":
+            return "Motion detected"
+        if event_name == "motion.stopped":
+            return "Motion cleared"
+        if event_name == "streamer.restarted":
+            service = str(payload.get("service") or "streaming").strip()
+            return f"{service} restarted"
+        if event_name == "record.completed":
+            path = str(payload.get("path") or "").strip()
+            duration = self._coerce_int(payload.get("duration_seconds"))
+            if path and duration is not None:
+                return f"{duration}s clip -> {path}"
+            if path:
+                return path
+            if duration is not None:
+                return f"{duration}s clip completed"
+            return "Clip recording completed"
+        if event_name == "firmware.progress":
+            phase = str(payload.get("phase") or payload.get("step") or "update").strip()
+            progress = payload.get("progress")
+            if progress not in {None, ""}:
+                return f"{phase}: {progress}%"
+            return phase or "Firmware update in progress"
+        if event_name == "health.warning":
+            message = str(payload.get("message") or payload.get("reason") or "").strip()
+            status = str(payload.get("status") or "").strip()
+            return message or status or "Camera reported a health warning"
+        if event_name == "state.changed":
+            paths = payload.get("paths") or []
+            if isinstance(paths, list) and paths:
+                return ", ".join(str(path).strip() for path in paths if str(path).strip())
+            return "Camera state changed"
+        return str(payload.get("message") or payload.get("detail") or event_name.replace(".", " ")).strip()
 
     def _schedule_api_refresh(self, camera_id: str) -> bool:
         resolved = self._resolve_camera_id(camera_id) or camera_id.strip().lower()
@@ -775,6 +946,7 @@ class Hub:
                 "network_online": (info or {}).get("network_online"),
                 "motion_enabled": (info or {}).get("motion_enabled"),
                 "privacy_enabled": (info or {}).get("privacy_enabled"),
+                "daynight_target_mode": (info or {}).get("daynight_target_mode", ""),
                 "daynight_running_mode": (info or {}).get("daynight_running_mode", ""),
                 "ip": (info or {}).get("ip", ""),
             },
@@ -784,6 +956,7 @@ class Hub:
                 "network_online": (info or {}).get("network_online"),
                 "motion_enabled": (info or {}).get("motion_enabled"),
                 "privacy_enabled": (info or {}).get("privacy_enabled"),
+                "daynight_target_mode": (info or {}).get("daynight_target_mode", ""),
                 "daynight_running_mode": (info or {}).get("daynight_running_mode", ""),
                 "ip": (info or {}).get("ip", ""),
             },
@@ -915,6 +1088,12 @@ class Hub:
             "success",
             ", ".join(sorted(payload.keys())) or str(result.get("status") or "accepted"),
         )
+        self._record_history_config_changes(
+            resolved,
+            self._config_changes_from_patch(payload),
+            source="native_api",
+            change_type="native_patch",
+        )
         if refresh_after:
             self.refresh_camera_api_details(resolved)
         else:
@@ -940,6 +1119,12 @@ class Hub:
 
         detail = ", ".join(sorted(payload.keys())) or "accepted"
         self._record_native_action(resolved, "send2_config", "success", detail)
+        self._record_history_config_changes(
+            resolved,
+            self._config_changes_from_patch(payload),
+            source="native_api",
+            change_type="send2_patch",
+        )
         return result
 
     def _merge_send2_payload(self, current: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
@@ -1122,7 +1307,11 @@ class Hub:
 
     def _native_action_history_for_ui(self, camera_id: str) -> list[dict[str, str]]:
         if self.history_store is not None:
-            rows = self.history_store.recent_action_events(camera_id, self.history_recent_actions_limit)
+            rows = self.history_store.recent_action_events(
+                camera_id,
+                self.history_recent_actions_limit,
+                sources=["native_api"],
+            )
             return [
                 {
                     "at": self._format_timestamp(entry.get("recorded_at")),
@@ -1153,20 +1342,105 @@ class Hub:
         status: str,
         detail: str,
         recorded_at: int | None = None,
+        source: str = "native_api",
+        payload_summary: str = "",
     ) -> None:
+        resolved = self._resolve_camera_id(camera_id) or camera_id.strip().lower()
+        when = recorded_at or int(time.time())
         if self.history_store is None:
-            return
-        try:
-            self.history_store.record_action_event(
-                recorded_at=recorded_at or int(time.time()),
-                camera_id=camera_id,
-                source="native_api",
+            self._append_live_event(
+                resolved,
+                source=source,
                 action=action,
                 status=status,
                 detail=detail,
+                recorded_at=when,
+            )
+            return
+        try:
+            self.history_store.record_action_event(
+                recorded_at=when,
+                camera_id=resolved,
+                source=source,
+                action=action,
+                status=status,
+                detail=detail,
+                payload_summary=payload_summary,
             )
         except Exception:
-            LOG.warning("Failed to record action history for %s", camera_id, exc_info=True)
+            LOG.warning("Failed to record action history for %s", resolved, exc_info=True)
+        self._append_live_event(
+            resolved,
+            source=source,
+            action=action,
+            status=status,
+            detail=detail,
+            recorded_at=when,
+        )
+
+    def _append_live_event(
+        self,
+        camera_id: str,
+        *,
+        source: str,
+        action: str,
+        status: str,
+        detail: str,
+        recorded_at: int,
+    ) -> dict[str, Any]:
+        with self.state_lock:
+            camera = self.cameras.get(camera_id)
+            self.live_event_sequence += 1
+            entry = {
+                "sequence": self.live_event_sequence,
+                "camera_id": camera_id,
+                "camera_name": camera.name if camera is not None else camera_id,
+                "timestamp": str(recorded_at),
+                "at": self._format_timestamp(recorded_at),
+                "source": source,
+                "name": str(action or "").replace("_", " "),
+                "status": str(status or "info"),
+                "detail": str(detail or "").strip(),
+            }
+            self.live_events.insert(0, entry)
+            self.live_events = self.live_events[:self.live_event_limit]
+        return entry
+
+    def _history_action_entry_for_ui(self, entry: dict[str, Any]) -> dict[str, Any]:
+        camera_id = str(entry.get("camera_id") or "").strip().lower()
+        with self.state_lock:
+            camera = self.cameras.get(camera_id)
+        return {
+            "sequence": 0,
+            "camera_id": camera_id,
+            "camera_name": camera.name if camera is not None else camera_id,
+            "timestamp": str(entry.get("recorded_at") or 0),
+            "at": self._format_timestamp(entry.get("recorded_at")),
+            "source": str(entry.get("source") or "native_api"),
+            "name": str(entry.get("action") or "").replace("_", " "),
+            "status": str(entry.get("status") or "info"),
+            "detail": str(entry.get("detail") or ""),
+        }
+
+    def list_recent_events_for_ui(self, limit: int = 40) -> list[dict[str, Any]]:
+        with self.state_lock:
+            snapshot = [dict(item) for item in self.live_events[:max(1, int(limit))]]
+        if snapshot:
+            return snapshot
+        if self.history_store is None:
+            return []
+        rows = self.history_store.recent_global_action_events(max(1, int(limit)))
+        return [self._history_action_entry_for_ui(row) for row in rows]
+
+    def live_events_since(self, last_sequence: int, limit: int = 20) -> tuple[int, list[dict[str, Any]]]:
+        with self.state_lock:
+            current_sequence = self.live_event_sequence
+            events = [
+                dict(item)
+                for item in reversed(self.live_events)
+                if int(item.get("sequence") or 0) > int(last_sequence)
+            ]
+        return current_sequence, events[:max(1, int(limit))]
 
     def _record_history_state_sample(
         self,
@@ -1189,6 +1463,110 @@ class Hub:
         except Exception:
             LOG.warning("Failed to record state sample for %s", camera_id, exc_info=True)
 
+    def _record_history_config_changes(
+        self,
+        camera_id: str,
+        changes: list[dict[str, Any]],
+        *,
+        source: str,
+        change_type: str,
+        recorded_at: int | None = None,
+    ) -> None:
+        if not changes or self.history_store is None:
+            return
+        resolved = self._resolve_camera_id(camera_id) or camera_id.strip().lower()
+        when = recorded_at or int(time.time())
+        try:
+            for change in changes:
+                self.history_store.record_config_change(
+                    recorded_at=when,
+                    camera_id=resolved,
+                    source=source,
+                    change_type=change_type,
+                    path=str(change.get("path") or "").strip() or "/",
+                    previous_value=change.get("previous"),
+                    new_value=change.get("new"),
+                    detail=str(change.get("detail") or "").strip(),
+                )
+        except Exception:
+            LOG.warning("Failed to record config changes for %s", resolved, exc_info=True)
+
+    def _flatten_config_payload(self, payload: Any, prefix: str = "") -> list[dict[str, Any]]:
+        if not isinstance(payload, dict):
+            return [{"path": prefix or "/", "value": payload}]
+        entries: list[dict[str, Any]] = []
+        for key, value in sorted(payload.items()):
+            path = f"{prefix}/{key}" if prefix else f"/{key}"
+            if isinstance(value, dict):
+                entries.extend(self._flatten_config_payload(value, path))
+            else:
+                entries.append({"path": path, "value": value})
+        return entries
+
+    def _config_changes_from_patch(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
+        return [
+            {
+                "path": entry["path"],
+                "previous": None,
+                "new": entry["value"],
+                "detail": "Native API patch",
+            }
+            for entry in self._flatten_config_payload(payload)
+        ]
+
+    def _config_changes_from_mapping(
+        self,
+        previous: dict[str, Any],
+        current: dict[str, Any],
+        *,
+        prefix: str,
+        detail: str,
+    ) -> list[dict[str, Any]]:
+        changes: list[dict[str, Any]] = []
+        keys = sorted(set(previous) | set(current))
+        for key in keys:
+            before = previous.get(key)
+            after = current.get(key)
+            if before == after:
+                continue
+            changes.append(
+                {
+                    "path": f"{prefix}/{key}",
+                    "previous": before,
+                    "new": after,
+                    "detail": detail,
+                }
+            )
+        return changes
+
+    def _config_change_entry_for_ui(self, entry: dict[str, Any]) -> dict[str, str]:
+        previous_text = str(entry.get("previous_json") or "null")
+        new_text = str(entry.get("new_json") or "null")
+        try:
+            previous_value = json_module.loads(previous_text)
+        except json_module.JSONDecodeError:
+            previous_value = previous_text
+        try:
+            new_value = json_module.loads(new_text)
+        except json_module.JSONDecodeError:
+            new_value = new_text
+        path = str(entry.get("path") or "/")
+        detail = str(entry.get("detail") or "").strip()
+        before_label = json_module.dumps(previous_value, sort_keys=True)
+        after_label = json_module.dumps(new_value, sort_keys=True)
+        summary = f"{path}: {before_label} -> {after_label}"
+        if detail:
+            summary = f"{summary} ({detail})"
+        return {
+            "at": self._format_timestamp(entry.get("recorded_at")),
+            "timestamp": str(entry.get("recorded_at") or 0),
+            "kind": "config",
+            "name": str(entry.get("change_type") or "config change").replace("_", " "),
+            "status": "info",
+            "source": str(entry.get("source") or "hub"),
+            "detail": summary,
+        }
+
     def get_camera_history_for_ui(
         self,
         camera_id: str,
@@ -1205,11 +1583,12 @@ class Hub:
         timeline: list[dict[str, str]] = []
         available_sample_types = ["all"]
         charts: list[dict[str, Any]] = []
-        kind_filter = kind_filter if kind_filter in {"all", "action", "state"} else "all"
+        kind_filter = kind_filter if kind_filter in {"all", "action", "state", "config"} else "all"
         sample_type_filter = sample_type_filter.strip() or "all"
         if self.history_store is not None:
             action_rows = self.history_store.recent_action_events(resolved, max(limit * 3, 100))
             state_rows = self.history_store.recent_state_samples(resolved, max(limit * 3, 100))
+            config_rows = self.history_store.recent_config_changes(resolved, max(limit * 3, 100))
             charts = self._history_charts_for_ui(state_rows)
             sample_types = sorted(
                 {
@@ -1241,6 +1620,10 @@ class Hub:
                         continue
                     timeline.append(self._state_sample_entry_for_ui(entry))
 
+            if kind_filter in {"all", "config"}:
+                for entry in config_rows:
+                    timeline.append(self._config_change_entry_for_ui(entry))
+
             timeline.sort(key=lambda item: int(item.get("timestamp") or 0), reverse=True)
             timeline = timeline[:limit]
         else:
@@ -1259,6 +1642,7 @@ class Hub:
 
         action_count = sum(1 for item in timeline if item.get("kind") == "action")
         state_count = sum(1 for item in timeline if item.get("kind") == "state")
+        config_count = sum(1 for item in timeline if item.get("kind") == "config")
         latest_api_probe = next(
             (
                 item
@@ -1290,6 +1674,7 @@ class Hub:
             "available_sample_types": available_sample_types,
             "timeline_action_count": action_count,
             "timeline_state_count": state_count,
+            "timeline_config_count": config_count,
             "latest_api_probe": latest_api_probe,
             "latest_snapshot_probe": latest_snapshot_probe,
             "charts": charts,
@@ -1309,6 +1694,18 @@ class Hub:
                 title="API Reachability",
                 rows=api_rows,
                 extractor=lambda row: self._status_flag(row.get("api_status"), "online"),
+                on_label="online",
+                off_label="offline",
+                legend_items=[
+                    {"label": "online", "fill": "#198754"},
+                    {"label": "offline", "fill": "#dc3545"},
+                    {"label": "unknown", "fill": "#6c757d"},
+                ],
+            ),
+            self._binary_history_chart(
+                title="Network Reachability",
+                rows=api_rows,
+                extractor=lambda row: self._db_bool(row.get("network_online")),
                 on_label="online",
                 off_label="offline",
                 legend_items=[
@@ -1357,6 +1754,17 @@ class Hub:
                 title="Day/Night Mode",
                 rows=api_rows,
                 extractor=lambda row: str(row.get("daynight_running_mode") or "").strip().lower() or "unknown",
+            ),
+            self._categorical_history_chart(
+                title="Day/Night Target",
+                rows=api_rows,
+                extractor=lambda row: str(row.get("daynight_target_mode") or "").strip().lower() or "unknown",
+            ),
+            self._categorical_history_chart(
+                title="IP Address",
+                rows=api_rows,
+                extractor=lambda row: str(row.get("ip") or "").strip() or "unknown",
+                palette={"unknown": "#6c757d"},
             ),
         ]
         snapshot_rows = [
@@ -1472,13 +1880,26 @@ class Hub:
         title: str,
         rows: list[dict[str, Any]],
         extractor: Any,
+        palette: dict[str, str] | None = None,
     ) -> dict[str, Any]:
-        palette = {
+        base_palette = {
             "day": "#f59f00",
             "night": "#0d6efd",
             "auto": "#20c997",
             "unknown": "#6c757d",
         }
+        if palette:
+            base_palette.update(palette)
+        fallback_palette = [
+            "#6610f2",
+            "#d63384",
+            "#fd7e14",
+            "#198754",
+            "#0dcaf0",
+            "#dc3545",
+            "#6f42c1",
+            "#20c997",
+        ]
         bars = []
         width = 320
         height = 44
@@ -1488,10 +1909,15 @@ class Hub:
         bar_width = max(2, raw_bar_width - gap)
         latest = "unknown"
         counts: dict[str, int] = {}
+        category_fills: dict[str, str] = dict(base_palette)
+        fallback_index = 0
         for index, row in enumerate(rows):
             value = extractor(row)
             latest = value if index == len(rows) - 1 else latest
             counts[value] = counts.get(value, 0) + 1
+            if value not in category_fills:
+                category_fills[value] = fallback_palette[fallback_index % len(fallback_palette)]
+                fallback_index += 1
             timestamp_label = self._format_timestamp(row.get("recorded_at"))
             bars.append(
                 {
@@ -1499,7 +1925,7 @@ class Hub:
                     "y": 6,
                     "width": bar_width,
                     "height": 32,
-                    "fill": palette.get(value, palette["unknown"]),
+                    "fill": category_fills.get(value, category_fills.get("unknown", "#6c757d")),
                     "title": f"{timestamp_label}: {value}",
                 }
             )
@@ -1517,10 +1943,8 @@ class Hub:
             "range_end": range_end,
             "sample_count": len(rows),
             "legend": [
-                {"label": "day", "fill": palette["day"]},
-                {"label": "night", "fill": palette["night"]},
-                {"label": "auto", "fill": palette["auto"]},
-                {"label": "unknown", "fill": palette["unknown"]},
+                {"label": label, "fill": category_fills[label]}
+                for label in sorted(counts)
             ],
             "summary": summary,
         }
@@ -1590,6 +2014,8 @@ class Hub:
                 flags.append("motion on" if int(entry["motion_enabled"]) else "motion off")
             if entry.get("privacy_enabled") is not None:
                 flags.append("privacy on" if int(entry["privacy_enabled"]) else "privacy off")
+            if entry.get("daynight_target_mode"):
+                flags.append(f"target {entry['daynight_target_mode']}")
             if entry.get("daynight_running_mode"):
                 flags.append(f"day/night {entry['daynight_running_mode']}")
             if entry.get("ip"):
@@ -1665,6 +2091,7 @@ class Hub:
         capabilities: dict[str, Any] = {}
         config_payload: dict[str, Any] = {}
         state_payload: dict[str, Any] = {}
+        live_stream_payloads: dict[str, dict[str, Any]] = {}
         native_controls_ok = False
         try:
             client = self._camera_api_client(camera)
@@ -1674,6 +2101,12 @@ class Hub:
             native_controls_ok = True
         except Exception as error:
             defaults["native_controls_error"] = self._normalize_native_api_error(error)
+
+        if native_controls_ok:
+            try:
+                live_stream_payloads = self._camera_prudynt_stream_payload(camera)
+            except Exception:
+                live_stream_payloads = {}
 
         backend_config = config_payload.get("backend") or {}
         prudynt_config = (backend_config.get("raw") or backend_config.get("prudynt") or {})
@@ -1707,6 +2140,7 @@ class Hub:
                 stream_index = int(stream_suffix)
                 if stream_count is not None and stream_count >= 0 and stream_index >= stream_count:
                     continue
+                live_stream_config = live_stream_payloads.get(stream_name) or {}
                 stream_controls.append(
                     {
                         "name": stream_name,
@@ -1722,9 +2156,24 @@ class Hub:
                         "mode_supported": "mode" in stream_config,
                         "enabled": bool(self._coerce_bool(stream_config.get("enabled"))),
                         "audio_enabled": bool(self._coerce_bool(stream_config.get("audio_enabled"))),
-                        "width": "" if "width" not in stream_config else str(stream_config.get("width") or 0),
-                        "height": "" if "height" not in stream_config else str(stream_config.get("height") or 0),
-                        "fps": "" if "fps" not in stream_config else str(stream_config.get("fps") or 0),
+                        "width": self._format_stream_control_value(
+                            stream_config,
+                            "width",
+                            zero_means_unset=True,
+                            fallback_value=live_stream_config.get("width"),
+                        ),
+                        "height": self._format_stream_control_value(
+                            stream_config,
+                            "height",
+                            zero_means_unset=True,
+                            fallback_value=live_stream_config.get("height"),
+                        ),
+                        "fps": self._format_stream_control_value(
+                            stream_config,
+                            "fps",
+                            zero_means_unset=True,
+                            fallback_value=live_stream_config.get("fps"),
+                        ),
                         "bitrate": "" if "bitrate" not in stream_config else str(stream_config.get("bitrate") or 0),
                         "format": str(stream_config.get("format") or "").strip(),
                         "mode": str(stream_config.get("mode") or "").strip(),
@@ -1870,6 +2319,7 @@ class Hub:
         self._ensure_camera(camera_id)
         text = None
         chat_id = None
+        pending = None
         try:
             decoded = json.loads(payload)
         except json.JSONDecodeError:
@@ -1893,6 +2343,11 @@ class Hub:
             if camera_id in self.last_chat_by_camera:
                 chat_id = self.last_chat_by_camera[camera_id]
             text = payload.strip()
+
+        if pending is not None and pending.get("reply_event") is not None:
+            pending["reply_text"] = text or ""
+            pending["reply_payload"] = decoded if decoded is not None else payload.strip()
+            pending["reply_event"].set()
 
         if chat_id is None:
             LOG.info("Dropping MQTT reply without Telegram chat mapping: %s", payload)
@@ -2183,6 +2638,23 @@ class Hub:
         json_payload: dict[str, Any] | None = None,
         timeout_seconds: int | None = None,
     ) -> dict[str, Any]:
+        return self._camera_webui_json_request(
+            camera,
+            path,
+            method=method,
+            json_payload=json_payload,
+            timeout_seconds=timeout_seconds,
+        )
+
+    def _camera_webui_json_request(
+        self,
+        camera: Camera,
+        path: str,
+        *,
+        method: str = "GET",
+        json_payload: dict[str, Any] | None = None,
+        timeout_seconds: int | None = None,
+    ) -> dict[str, Any]:
         base_url = self._camera_web_ui_url(camera)
         if not base_url:
             raise RuntimeError(f"Web UI URL is not configured for {camera.name}")
@@ -2217,6 +2689,141 @@ class Hub:
         if not isinstance(decoded, dict):
             raise RuntimeError("Camera send2 endpoint returned an invalid response")
         return decoded
+
+    def _ensure_camera_pairing_command_subscription(self, camera: Camera) -> dict[str, Any]:
+        mqtt_cfg = self.config["mqtt"]
+        payload = self._camera_webui_json_request(
+            camera,
+            "/x/json-config-mqtt-sub.cgi",
+            method="GET",
+            timeout_seconds=max(self.snapshot_heartbeat_timeout_seconds, 10),
+        )
+        subscriptions = payload.get("subscriptions")
+        if not isinstance(subscriptions, list):
+            subscriptions = []
+
+        expected_topic = "thingino/cam/%id/cmd"
+        expected_action = 'telegram-cam-agent "$MQTT_PAYLOAD"'
+        expected_subscription = {
+            "enabled": True,
+            "topic": expected_topic,
+            "qos": 0,
+            "action": expected_action,
+        }
+        invalid_camera_hosts = {"", "127.0.0.1", "localhost", "host.containers.internal", "host.docker.internal"}
+
+        current_subscriptions: list[dict[str, Any]] = []
+        normalized_subscriptions: list[dict[str, Any]] = []
+        found_expected = False
+        for item in subscriptions:
+            if not isinstance(item, dict):
+                continue
+            normalized = {
+                "enabled": bool(item.get("enabled")),
+                "topic": str(item.get("topic") or "").strip(),
+                "qos": int(item.get("qos") or 0),
+                "action": str(item.get("action") or "").strip(),
+            }
+            current_subscriptions.append(dict(normalized))
+            if normalized["topic"] == expected_topic and normalized["action"] == expected_action:
+                normalized.update(expected_subscription)
+                found_expected = True
+            normalized_subscriptions.append(normalized)
+
+        if not found_expected:
+            normalized_subscriptions.append(dict(expected_subscription))
+
+        hub_host = str(mqtt_cfg.get("host") or "").strip()
+        broker_host = hub_host
+        broker_port = int(mqtt_cfg.get("port", 1883) or 1883)
+        broker_username = str(mqtt_cfg.get("username") or "").strip()
+        broker_password = str(mqtt_cfg.get("password") or "")
+        broker_use_ssl = bool(mqtt_cfg.get("use_tls"))
+
+        if broker_host in invalid_camera_hosts:
+            current_host = str(payload.get("host") or "").strip()
+            if current_host not in invalid_camera_hosts:
+                broker_host = current_host
+                broker_port = int(payload.get("port") or broker_port)
+                broker_username = str(payload.get("username") or broker_username).strip()
+                broker_password = str(payload.get("password") or broker_password)
+                broker_use_ssl = bool(payload.get("use_ssl"))
+            else:
+                send2_payload = self._camera_send2_request(camera, "/x/json-send2.cgi", method="GET")
+                send2_mqtt = send2_payload.get("mqtt") if isinstance(send2_payload, dict) else None
+                if isinstance(send2_mqtt, dict):
+                    send2_host = str(send2_mqtt.get("host") or "").strip()
+                    if send2_host not in invalid_camera_hosts:
+                        broker_host = send2_host
+                        broker_port = int(send2_mqtt.get("port") or broker_port)
+                        broker_username = str(send2_mqtt.get("username") or broker_username).strip()
+                        broker_password = str(send2_mqtt.get("password") or broker_password)
+                        broker_use_ssl = bool(send2_mqtt.get("use_ssl"))
+
+        if broker_host in invalid_camera_hosts:
+            raise RuntimeError(
+                "Cannot repair camera MQTT command listener automatically because the hub broker host is container-local and the camera has no reachable broker host configured"
+            )
+
+        desired_payload = {
+            "enabled": True,
+            "host": broker_host,
+            "port": broker_port,
+            "username": broker_username,
+            "password": broker_password,
+            "use_ssl": broker_use_ssl,
+            "subscriptions": normalized_subscriptions,
+        }
+
+        current_payload = {
+            "enabled": bool(payload.get("enabled")),
+            "host": str(payload.get("host") or "").strip(),
+            "port": int(payload.get("port") or 1883),
+            "username": str(payload.get("username") or "").strip(),
+            "password": str(payload.get("password") or ""),
+            "use_ssl": bool(payload.get("use_ssl")),
+            "subscriptions": current_subscriptions,
+        }
+
+        config_changed = current_payload != desired_payload
+        if config_changed:
+            self._camera_webui_json_request(
+                camera,
+                "/x/json-config-mqtt-sub.cgi",
+                method="POST",
+                json_payload=desired_payload,
+                timeout_seconds=max(self.snapshot_heartbeat_timeout_seconds, 10),
+            )
+
+        self._camera_webui_json_request(
+            camera,
+            "/x/mqtt-sub-restart.cgi",
+            method="POST",
+            timeout_seconds=max(self.snapshot_heartbeat_timeout_seconds, 10),
+        )
+        time.sleep(1)
+        return {
+            "config_changed": config_changed,
+            "host": broker_host,
+            "topic": expected_topic,
+        }
+
+    def _camera_prudynt_stream_payload(self, camera: Camera) -> dict[str, dict[str, Any]]:
+        payload = self._camera_webui_json_request(
+            camera,
+            "/x/json-prudynt.cgi",
+            method="POST",
+            json_payload={
+                "stream0": {"width": None, "height": None, "fps": None},
+                "stream1": {"width": None, "height": None, "fps": None},
+            },
+            timeout_seconds=max(self.snapshot_heartbeat_timeout_seconds, 10),
+        )
+        return {
+            stream_name: stream_payload
+            for stream_name, stream_payload in payload.items()
+            if stream_name.startswith("stream") and isinstance(stream_payload, dict)
+        }
 
     def _camera_send2_controls_for_ui(self, camera: Camera) -> dict[str, Any]:
         defaults = {
@@ -2639,6 +3246,46 @@ class Hub:
                 return f"Snapshot failed for {camera.name}: {error}"
 
         request_id = uuid.uuid4().hex
+        publish_result = self._publish_camera_command(
+            camera_id,
+            command,
+            command_args,
+            chat_id=chat_id,
+            username=username,
+            request_id=request_id,
+            raw_text=" ".join(args[1:]),
+        )
+        if not publish_result["published"]:
+            return "Failed to publish MQTT command"
+        display_name = camera.name
+        joined_args = " ".join(command_args)
+        summary = command if not joined_args else f"{command} {joined_args}"
+        return f"Queued for {display_name}: {summary}"
+
+    def _publish_camera_command(
+        self,
+        camera_id: str,
+        command: str,
+        args: list[str] | None = None,
+        *,
+        chat_id: int = 0,
+        username: str = "",
+        request_id: str | None = None,
+        raw_text: str | None = None,
+        wait_for_reply_seconds: float = 0.0,
+    ) -> dict[str, Any]:
+        if not self._connect_mqtt() or self.mqtt_client is None:
+            return {
+                "published": False,
+                "request_id": request_id or "",
+                "reply_received": False,
+                "reply_ok": None,
+                "reply_text": "",
+                "reply_payload": None,
+            }
+
+        command_args = [str(item) for item in (args or [])]
+        request_id = request_id or uuid.uuid4().hex
         payload = {
             "request_id": request_id,
             "chat_id": chat_id,
@@ -2646,28 +3293,63 @@ class Hub:
             "camera_id": camera_id,
             "command": command,
             "args": command_args,
-            "raw_text": " ".join(args[1:]),
+            "raw_text": raw_text if raw_text is not None else (command if not command_args else f"{command} {' '.join(command_args)}"),
             "sent_at": int(time.time()),
         }
-        topic = self.command_topic_template.format(camera_id=camera_id)
-        with self.reply_lock:
-            self.pending_by_request[request_id] = {
+        pending: dict[str, Any] | None = None
+        reply_event: threading.Event | None = None
+        if chat_id > 0 or wait_for_reply_seconds > 0:
+            pending = {
                 "chat_id": chat_id,
                 "camera_id": camera_id,
                 "command": command,
                 "created_at": time.time(),
             }
-        self.last_chat_by_camera[camera_id] = chat_id
+            if wait_for_reply_seconds > 0:
+                reply_event = threading.Event()
+                pending["reply_event"] = reply_event
+                pending["reply_text"] = ""
+                pending["reply_payload"] = None
+            with self.reply_lock:
+                self.pending_by_request[request_id] = pending
+        if chat_id > 0:
+            self.last_chat_by_camera[camera_id] = chat_id
+
+        topic = self.command_topic_template.format(camera_id=camera_id)
         info = self.mqtt_client.publish(topic, json.dumps(payload), qos=1)
         info.wait_for_publish()
         if info.rc != mqtt.MQTT_ERR_SUCCESS:
             with self.reply_lock:
                 self.pending_by_request.pop(request_id, None)
-            return "Failed to publish MQTT command"
-        display_name = camera.name
-        joined_args = " ".join(command_args)
-        summary = command if not joined_args else f"{command} {joined_args}"
-        return f"Queued for {display_name}: {summary}"
+            return {
+                "published": False,
+                "request_id": request_id,
+                "reply_received": False,
+                "reply_ok": None,
+                "reply_text": "",
+                "reply_payload": None,
+            }
+
+        result = {
+            "published": True,
+            "request_id": request_id,
+            "reply_received": False,
+            "reply_ok": None,
+            "reply_text": "",
+            "reply_payload": None,
+        }
+        if reply_event is not None and pending is not None:
+            if reply_event.wait(max(wait_for_reply_seconds, 0.1)):
+                result["reply_received"] = True
+                result["reply_text"] = str(pending.get("reply_text") or "")
+                result["reply_payload"] = pending.get("reply_payload")
+                reply_payload = pending.get("reply_payload")
+                if isinstance(reply_payload, dict) and reply_payload.get("ok") is not None:
+                    result["reply_ok"] = bool(reply_payload.get("ok"))
+            else:
+                with self.reply_lock:
+                    self.pending_by_request.pop(request_id, None)
+        return result
 
     def export_config(self) -> dict[str, Any]:
         with self.state_lock:
@@ -2707,6 +3389,8 @@ class Hub:
         if camera is None:
             raise RuntimeError(f"Unknown camera: {camera_id}")
 
+        previous_entry = self.export_camera_override(resolved)
+
         config = self.export_config()
         cameras = list(config.get("cameras", []))
         index = None
@@ -2715,17 +3399,22 @@ class Hub:
                 index = idx
                 break
 
+        def override_value(field: str, fallback: str = "") -> str:
+            if field not in override:
+                return str(previous_entry.get(field) or fallback)
+            return str(override.get(field) or "")
+
         entry = {
             "id": resolved,
-            "name": override.get("name", "").strip() or camera.name,
-            "ip": override.get("ip", "").strip(),
-            "snapshot_url": override.get("snapshot_url", "").strip(),
-            "api_key": override.get("api_key", "").strip(),
-            "api_base_url": override.get("api_base_url", "").strip(),
-            "api_token": override.get("api_token", "").strip(),
-            "onvif_endpoint": override.get("onvif_endpoint", "").strip(),
-            "onvif_username": override.get("onvif_username", "").strip(),
-            "onvif_password": override.get("onvif_password", ""),
+            "name": override_value("name", camera.name).strip() or camera.name,
+            "ip": override_value("ip", camera.ip).strip(),
+            "snapshot_url": override_value("snapshot_url", camera.snapshot_url).strip(),
+            "api_key": override_value("api_key", camera.api_key).strip(),
+            "api_base_url": override_value("api_base_url", camera.api_base_url).strip(),
+            "api_token": override_value("api_token", camera.api_token).strip(),
+            "onvif_endpoint": override_value("onvif_endpoint", camera.onvif_endpoint).strip(),
+            "onvif_username": override_value("onvif_username", camera.onvif_username).strip(),
+            "onvif_password": override_value("onvif_password", camera.onvif_password),
         }
         if index is None:
             cameras.append(entry)
@@ -2734,6 +3423,567 @@ class Hub:
         config["cameras"] = cameras
         self.save_config(config)
         self.reload_config()
+        self._record_history_config_changes(
+            resolved,
+            self._config_changes_from_mapping(
+                previous_entry,
+                entry,
+                prefix="/hub/override",
+                detail="Hub override save",
+            ),
+            source="hub",
+            change_type="override_update",
+        )
+        self._record_history_action(
+            resolved,
+            "override_updated",
+            "success",
+            "Hub override saved",
+            source="hub",
+        )
+
+    def connect_camera(self, enrollment: dict[str, str]) -> dict[str, Any]:
+        result = self.install_pairing_bundle_via_mqtt(enrollment)
+        camera_id = str(result.get("camera_id") or enrollment.get("camera_id") or enrollment.get("id") or "").strip().lower()
+        if not camera_id:
+            raise RuntimeError("Connect flow did not resolve a camera ID")
+        self._record_history_action(
+            camera_id,
+            "connect",
+            str(result.get("status") or "success"),
+            str(result.get("status_detail") or "Connected to hub").strip(),
+            source="hub",
+            payload_summary=json.dumps({
+                "api_base_url": result.get("api_base_url"),
+                "pairing_listener": result.get("pairing_listener"),
+            }, sort_keys=True),
+        )
+        onvif_username = str(enrollment.get("onvif_username") or "").strip()
+        onvif_password = str(enrollment.get("onvif_password") or "")
+        if onvif_username and onvif_username != self.default_onvif_username:
+            self._save_default_onvif_credentials(onvif_username, onvif_password or self.default_onvif_password)
+        elif onvif_password and onvif_password != self.default_onvif_password:
+            self._save_default_onvif_credentials(self.default_onvif_username, onvif_password)
+        return result
+
+    def _save_default_onvif_credentials(self, username: str, password: str) -> None:
+        config = json.loads(json.dumps(self.config))
+        if "defaults" not in config or not isinstance(config.get("defaults"), dict):
+            config["defaults"] = {}
+        config["defaults"]["onvif_username"] = username
+        config["defaults"]["onvif_password"] = password
+        self.save_config(config)
+        self.reload_config()
+
+    def _normalized_enrollment_entry(self, enrollment: dict[str, str]) -> dict[str, str]:
+        camera_id = str(enrollment.get("camera_id") or enrollment.get("id") or "").strip().lower()
+        ip = str(enrollment.get("ip") or "").strip()
+        snapshot_url = str(enrollment.get("snapshot_url") or "").strip()
+        api_key = str(enrollment.get("api_key") or "").strip()
+        api_base_url = str(enrollment.get("api_base_url") or "").strip()
+        api_token = str(enrollment.get("api_token") or "").strip()
+        onvif_endpoint = str(enrollment.get("onvif_endpoint") or "").strip()
+        onvif_username = str(enrollment.get("onvif_username") or "").strip()
+        onvif_password = str(enrollment.get("onvif_password") or "")
+
+        resolved_name = str(enrollment.get("name") or "").strip()
+        if ip:
+            resolved_camera_id, discovered_name = self._resolve_enrollment_camera_identity(ip)
+            if not camera_id:
+                camera_id = resolved_camera_id
+            if not resolved_name:
+                resolved_name = discovered_name
+
+        name = resolved_name or camera_id
+
+        if not api_base_url and ip:
+            api_base_url = f"https://{ip}:1998/api/v1"
+        if not snapshot_url and ip:
+            snapshot_url = f"http://{ip}/x/ch0.jpg"
+
+        return {
+            "id": camera_id,
+            "name": name,
+            "ip": ip,
+            "snapshot_url": snapshot_url,
+            "api_key": api_key,
+            "api_base_url": api_base_url,
+            "api_token": api_token,
+            "onvif_endpoint": onvif_endpoint,
+            "onvif_username": onvif_username,
+            "onvif_password": onvif_password,
+        }
+
+    def _resolve_enrollment_camera_identity(self, ip: str) -> tuple[str, str]:
+        normalized_ip = str(ip or "").strip()
+        if not normalized_ip:
+            return "", ""
+        with self.state_lock:
+            matches = [camera for camera in self.cameras.values() if str(camera.ip or "").strip() == normalized_ip]
+        if not matches:
+            return "", ""
+        if len(matches) > 1:
+            raise RuntimeError(f"Multiple cameras currently use IP {normalized_ip}; wait for stale entries to clear or remove the duplicate first")
+        camera = matches[0]
+        discovered_name = str(camera.name or camera.hostname or camera.camera_id).strip() or camera.camera_id
+        return camera.camera_id, discovered_name
+
+    def _camera_conflicts_for_enrollment(self, camera_id: str, ip: str) -> dict[str, str]:
+        conflicts: dict[str, str] = {}
+        normalized_id = str(camera_id or "").strip().lower()
+        normalized_ip = str(ip or "").strip()
+        with self.state_lock:
+            snapshot = list(self.cameras.values())
+        for camera in snapshot:
+            if normalized_id and camera.camera_id == normalized_id:
+                conflicts["camera_id"] = camera.camera_id
+            if normalized_ip and camera.ip == normalized_ip and camera.camera_id != normalized_id:
+                conflicts["ip"] = camera.camera_id
+        return conflicts
+
+    def probe_camera_enrollment(self, enrollment: dict[str, str]) -> dict[str, Any]:
+        entry = self._normalized_enrollment_entry(enrollment)
+        camera_id = entry["id"]
+        ip = entry["ip"]
+        if not entry["api_base_url"] and not ip and not entry["snapshot_url"] and not entry["onvif_endpoint"]:
+            raise RuntimeError("Provide at least an IP address, API base URL, snapshot URL, or ONVIF endpoint")
+
+        conflicts = self._camera_conflicts_for_enrollment(camera_id, ip)
+        probe_camera = Camera(
+            camera_id=camera_id or (ip or "camera"),
+            name=entry["name"] or camera_id or ip or "camera",
+            ip=ip,
+            snapshot_url=entry["snapshot_url"],
+            api_key=entry["api_key"],
+            api_base_url=entry["api_base_url"],
+            api_token=entry["api_token"],
+            onvif_endpoint=entry["onvif_endpoint"],
+            onvif_username=entry["onvif_username"],
+            onvif_password=entry["onvif_password"],
+            status="static",
+        )
+
+        api_probe: dict[str, Any] = {
+            "configured": bool(entry["api_base_url"]),
+            "ok": False,
+            "base_url": entry["api_base_url"],
+            "error": "",
+            "device_name": "",
+            "device_model": "",
+            "streamer": "",
+            "version": "",
+        }
+        if entry["api_base_url"]:
+            try:
+                api_info = self._fetch_camera_api_details(probe_camera)
+                api_probe.update(
+                    {
+                        "ok": True,
+                        "device_name": str(api_info.get("device_name") or ""),
+                        "device_model": str(api_info.get("device_model") or ""),
+                        "streamer": str(api_info.get("streamer") or ""),
+                        "version": str(api_info.get("version") or ""),
+                    }
+                )
+            except Exception as error:
+                api_probe["error"] = self._normalize_native_api_error(error)
+
+        onvif_endpoint = self._camera_onvif_endpoint(probe_camera)
+        onvif_probe: dict[str, Any] = {
+            "configured": bool(onvif_endpoint),
+            "ok": False,
+            "endpoint": onvif_endpoint,
+            "error": "",
+            "manufacturer": "",
+            "model": "",
+            "firmware_version": "",
+        }
+        if onvif_endpoint:
+            try:
+                onvif_info = self._fetch_onvif_device_information(probe_camera)
+                onvif_probe.update(
+                    {
+                        "ok": True,
+                        "manufacturer": str(onvif_info.get("manufacturer") or ""),
+                        "model": str(onvif_info.get("model") or ""),
+                        "firmware_version": str(onvif_info.get("firmware_version") or ""),
+                    }
+                )
+            except Exception as error:
+                onvif_probe["error"] = str(error)
+
+        snapshot_url = self._camera_snapshot_url(probe_camera) or ""
+        result = {
+            "camera_id": camera_id,
+            "name": entry["name"] or camera_id or ip,
+            "ip": ip,
+            "conflicts": conflicts,
+            "api": api_probe,
+            "onvif": onvif_probe,
+            "snapshot_url": snapshot_url,
+            "can_save": "ip" not in conflicts,
+        }
+        self._record_history_action(
+            camera_id,
+            "enrollment_probe",
+            "success" if result["can_save"] else "warning",
+            f"api={'ok' if api_probe['ok'] else 'fail'} onvif={'ok' if onvif_probe['ok'] else 'fail'}",
+            source="hub",
+        )
+        return result
+
+    def generate_pairing_bundle(self, enrollment: dict[str, str]) -> dict[str, Any]:
+        entry = self._normalized_enrollment_entry(enrollment)
+        camera_id = entry["id"]
+        if not entry["api_base_url"] and not entry["ip"]:
+            raise RuntimeError("Provide at least an IP address or API base URL to prepare pairing")
+        if not camera_id:
+            raise RuntimeError(f"Camera at IP {entry['ip']} is not currently registered with the hub, so its MQTT camera ID cannot be resolved automatically yet")
+
+        token = entry["api_token"] or secrets.token_urlsafe(24)
+        port = 1998
+        listen_addr = "0.0.0.0"
+        bootstrap_payload = {
+            "agent": {
+                "enabled": True,
+                "tls": True,
+                "listen": listen_addr,
+                "port": port,
+                "token": token,
+            }
+        }
+        api_base_url = entry["api_base_url"] or (f"https://{entry['ip']}:{port}/api/v1" if entry["ip"] else "")
+        bootstrap_json = json.dumps(bootstrap_payload, indent=2, sort_keys=True)
+        compact_bootstrap_json = json.dumps(bootstrap_payload, sort_keys=True)
+        token_json = json.dumps(token)
+        listen_json = json.dumps(listen_addr)
+        shell_bootstrap_json = json.dumps(compact_bootstrap_json)
+        commands = [
+            "jct /etc/thingino.json set agent.enabled true",
+            "jct /etc/thingino.json set agent.tls true",
+            f"jct /etc/thingino.json set agent.listen {listen_json}",
+            f"jct /etc/thingino.json set agent.port {port}",
+            f"jct /etc/thingino.json set agent.token {token_json}",
+            "/etc/init.d/S95thingino-agent restart",
+        ]
+        bootstrap_install_commands = [
+            f"printf '%s\\n' {shell_bootstrap_json} > /etc/thingino-agent-bootstrap.json",
+            "/etc/init.d/S95thingino-agent restart",
+        ]
+        save_entry = dict(entry)
+        save_entry["api_base_url"] = api_base_url
+        save_entry["api_token"] = token
+
+        self._record_history_action(
+            camera_id,
+            "pairing_bundle",
+            "success",
+            f"Prepared pairing bundle for {api_base_url or camera_id}",
+            source="hub",
+            payload_summary=json.dumps({"api_base_url": api_base_url, "listen": listen_addr, "port": port}, sort_keys=True),
+        )
+
+        return {
+            "camera_id": camera_id,
+            "name": entry["name"],
+            "ip": entry["ip"],
+            "api_base_url": api_base_url,
+            "api_token": token,
+            "bootstrap_payload": bootstrap_payload,
+            "bootstrap_json": bootstrap_json,
+            "commands": commands,
+            "bootstrap_install_commands": bootstrap_install_commands,
+            "save_entry": save_entry,
+        }
+
+    def install_pairing_bundle_via_mqtt(self, enrollment: dict[str, str]) -> dict[str, Any]:
+        bundle = self.generate_pairing_bundle(enrollment)
+        camera_id = str(bundle.get("camera_id") or "").strip().lower()
+        resolved = self._resolve_camera_id(camera_id) or camera_id
+        if not resolved or resolved not in self.cameras:
+            raise RuntimeError("MQTT pairing install requires the camera to be currently registered with the hub")
+
+        with self.state_lock:
+            camera = self.cameras.get(resolved)
+        if camera is None:
+            raise RuntimeError("MQTT pairing install requires the camera to be currently registered with the hub")
+
+        save_entry = bundle.get("save_entry") if isinstance(bundle.get("save_entry"), dict) else {}
+        pairing_camera = replace(
+            camera,
+            onvif_username=str(save_entry.get("onvif_username") or camera.onvif_username),
+            onvif_password=str(save_entry.get("onvif_password") or camera.onvif_password),
+            ip=str(save_entry.get("ip") or camera.ip),
+        )
+
+        pairing_listener = self._ensure_camera_pairing_command_subscription(pairing_camera)
+
+        publish_result = self._publish_camera_command(
+            resolved,
+            "install-agent-bootstrap",
+            [str(bundle.get("api_token") or "")],
+            wait_for_reply_seconds=max(float(self.command_reply_timeout_seconds), 20.0),
+        )
+        if not publish_result["published"]:
+            raise RuntimeError("Failed to publish MQTT pairing install command")
+
+        reply_text = str(publish_result.get("reply_text") or "").strip()
+        lowered_reply = reply_text.lower()
+        reply_failed = bool(
+            publish_result.get("reply_ok") is False
+            or (
+                publish_result.get("reply_received")
+                and publish_result.get("reply_ok") is None
+                and (
+                    lowered_reply.startswith("failed")
+                    or lowered_reply.startswith("unsupported")
+                    or "mismatch" in lowered_reply
+                    or lowered_reply.startswith("unable")
+                )
+            )
+        )
+        if reply_failed:
+            self._record_history_action(
+                resolved,
+                "pairing_install",
+                "error",
+                reply_text or "Camera rejected MQTT pairing install",
+                source="hub",
+                payload_summary=json.dumps({"api_base_url": bundle.get("api_base_url")}, sort_keys=True),
+            )
+            raise RuntimeError(reply_text or "Camera rejected MQTT pairing install")
+
+        if publish_result["reply_received"]:
+            status = "success"
+            detail = reply_text or "Agent bootstrap installed via MQTT"
+            save_entry = bundle.get("save_entry")
+            if isinstance(save_entry, dict):
+                self.enroll_camera({str(key): str(value or "") for key, value in save_entry.items()})
+        else:
+            confirmed_via_api = self._confirm_pairing_install_via_api(resolved, bundle)
+            if confirmed_via_api:
+                status = "success"
+                detail = "Camera did not confirm over MQTT, but the native API came back with the newly installed token"
+            else:
+                status = "warning"
+                detail = "Pairing install published over MQTT, but the camera did not confirm before the timeout"
+
+        self._record_history_action(
+            resolved,
+            "pairing_install",
+            status,
+            detail,
+            source="hub",
+            payload_summary=json.dumps({
+                "api_base_url": bundle.get("api_base_url"),
+                "listener_repaired": bool(pairing_listener.get("config_changed")),
+            }, sort_keys=True),
+        )
+
+        if status == "success":
+            self._refresh_camera_state_after_pairing(resolved)
+
+        return {
+            **bundle,
+            "status": status,
+            "status_detail": detail,
+            "pairing_listener": pairing_listener,
+            "mqtt": {
+                "camera_id": resolved,
+                "published": True,
+                "reply_received": bool(publish_result.get("reply_received")),
+                "reply_ok": publish_result.get("reply_ok"),
+                "reply_text": reply_text,
+                "request_id": publish_result.get("request_id") or "",
+            },
+        }
+
+    def _confirm_pairing_install_via_api(self, camera_id: str, bundle: dict[str, Any]) -> bool:
+        api_base_url = str(bundle.get("api_base_url") or "").strip()
+        api_token = str(bundle.get("api_token") or "").strip()
+        if not api_base_url or not api_token:
+            return False
+
+        with self.state_lock:
+            current = self.cameras.get(camera_id)
+        if current is None:
+            return False
+
+        probe_camera = replace(current, api_base_url=api_base_url, api_token=api_token)
+        deadline = time.monotonic() + max(float(self.command_reply_timeout_seconds), 12.0)
+        last_error = ""
+        while time.monotonic() < deadline:
+            try:
+                self._fetch_camera_api_details(probe_camera)
+            except Exception as error:
+                last_error = self._normalize_native_api_error(error)
+                time.sleep(1)
+                continue
+
+            save_entry = bundle.get("save_entry")
+            if isinstance(save_entry, dict):
+                self.enroll_camera({str(key): str(value or "") for key, value in save_entry.items()})
+            return True
+
+        if last_error:
+            LOG.info("Pairing API confirmation did not succeed for %s: %s", camera_id, last_error)
+        return False
+
+    def _refresh_camera_state_after_pairing(self, camera_id: str) -> None:
+        deadline = time.monotonic() + 20.0
+        while time.monotonic() < deadline:
+            try:
+                if self.refresh_camera_api_details(camera_id):
+                    try:
+                        self.refresh_camera_supported_controls_for_ui(camera_id)
+                    except Exception:
+                        LOG.debug("Supported controls refresh after pairing failed for %s", camera_id, exc_info=True)
+                    return
+            except Exception:
+                LOG.debug("API refresh after pairing failed for %s", camera_id, exc_info=True)
+            time.sleep(1)
+
+    def enroll_camera(self, enrollment: dict[str, str]) -> dict[str, Any]:
+        raw_camera_id = str(enrollment.get("camera_id") or enrollment.get("id") or "").strip().lower()
+        entry = self._normalized_enrollment_entry(enrollment)
+        raw_camera_id = raw_camera_id or entry["id"]
+        if not raw_camera_id:
+            raise RuntimeError(f"Camera at IP {entry['ip']} is not currently registered with the hub, so its MQTT camera ID cannot be resolved automatically yet")
+        conflicts = self._camera_conflicts_for_enrollment(raw_camera_id, entry["ip"])
+        if "ip" in conflicts:
+            raise RuntimeError(f"IP {entry['ip']} is already assigned to {conflicts['ip']}")
+
+        config = self.export_config()
+        cameras = list(config.get("cameras", []))
+        updated_existing = False
+        previous_entry: dict[str, Any] = {"id": raw_camera_id}
+        for index, item in enumerate(cameras):
+            if str(item.get("id") or "").strip().lower() != raw_camera_id:
+                continue
+            previous_entry = {
+                "id": str(item.get("id") or raw_camera_id).strip().lower(),
+                "name": str(item.get("name") or raw_camera_id).strip(),
+                "ip": str(item.get("ip") or "").strip(),
+                "snapshot_url": str(item.get("snapshot_url") or "").strip(),
+                "api_key": str(item.get("api_key") or "").strip(),
+                "api_base_url": str(item.get("api_base_url") or "").strip(),
+                "api_token": str(item.get("api_token") or "").strip(),
+                "onvif_endpoint": str(item.get("onvif_endpoint") or "").strip(),
+                "onvif_username": str(item.get("onvif_username") or "").strip(),
+                "onvif_password": str(item.get("onvif_password") or ""),
+            }
+            cameras[index] = entry
+            updated_existing = True
+            break
+        if not updated_existing:
+            cameras.append(entry)
+        config["cameras"] = cameras
+        self.save_config(config)
+        self.reload_config()
+
+        rescan_total, rescan_published = self.rescan_cameras(raw_camera_id)
+        api_refresh = "not_configured"
+        onvif_refresh = "not_configured"
+        controls_refresh = "not_configured"
+        try:
+            api_refresh = self.queue_camera_api_refresh(raw_camera_id)
+            controls_refresh = "scheduled"
+        except Exception:
+            api_refresh = "not_configured"
+            controls_refresh = "not_configured"
+        try:
+            onvif_refresh = self.queue_camera_onvif_refresh(raw_camera_id)
+        except Exception:
+            onvif_refresh = "not_configured"
+
+        detail = entry["name"] if not entry["ip"] else f"{entry['name']} @ {entry['ip']}"
+        self._record_history_config_changes(
+            raw_camera_id,
+            self._config_changes_from_mapping(
+                previous_entry,
+                entry,
+                prefix="/hub/enrollment",
+                detail="Camera enrollment",
+            ),
+            source="hub",
+            change_type="enrollment_update" if updated_existing else "enrollment_create",
+        )
+        self._record_history_action(
+            raw_camera_id,
+            "enrolled",
+            "success",
+            detail,
+            source="hub",
+        )
+
+        return {
+            "camera_id": raw_camera_id,
+            "updated_existing": updated_existing,
+            "rescan_requested": rescan_total > 0 and rescan_published > 0,
+            "api_refresh": api_refresh,
+            "onvif_refresh": onvif_refresh,
+            "controls_refresh": controls_refresh,
+        }
+
+    def perform_bulk_action(self, camera_ids: list[str], action: str) -> dict[str, Any]:
+        targets: list[str] = []
+        seen: set[str] = set()
+        for camera_id in camera_ids:
+            resolved = self._resolve_camera_id(camera_id) or str(camera_id or "").strip().lower()
+            if not resolved or resolved in seen:
+                continue
+            with self.state_lock:
+                exists = resolved in self.cameras
+            if not exists:
+                continue
+            seen.add(resolved)
+            targets.append(resolved)
+
+        if not targets:
+            raise RuntimeError("Select at least one known camera")
+
+        normalized_action = str(action or "").strip().lower()
+        results: list[dict[str, str]] = []
+        for camera_id in targets:
+            try:
+                if normalized_action == "refresh-api":
+                    detail = self.queue_camera_api_refresh(camera_id)
+                    self._record_history_action(camera_id, "bulk_refresh_api", "success", detail, source="hub")
+                elif normalized_action == "refresh-onvif":
+                    detail = self.queue_camera_onvif_refresh(camera_id)
+                    self._record_history_action(camera_id, "bulk_refresh_onvif", "success", detail, source="hub")
+                elif normalized_action == "refresh-snapshot":
+                    detail = self.queue_snapshot_refresh(camera_id)
+                    self._record_history_action(camera_id, "bulk_refresh_snapshot", "success", detail, source="hub")
+                elif normalized_action == "rescan":
+                    total, published = self.rescan_cameras(camera_id)
+                    detail = "scheduled" if published == total else "publish_failed"
+                    self._record_history_action(camera_id, "bulk_rescan", "success" if published == total else "error", detail, source="hub")
+                elif normalized_action == "restart-streaming":
+                    self.control_camera_service(camera_id, "streaming", "restart", refresh_after=False)
+                    detail = "requested"
+                elif normalized_action == "start-streaming":
+                    self.control_camera_service(camera_id, "streaming", "start", refresh_after=False)
+                    detail = "requested"
+                elif normalized_action == "stop-streaming":
+                    self.control_camera_service(camera_id, "streaming", "stop", refresh_after=False)
+                    detail = "requested"
+                else:
+                    raise RuntimeError(f"Unsupported bulk action: {action}")
+                results.append({"camera_id": camera_id, "status": "success", "detail": detail})
+            except Exception as error:
+                self._record_history_action(camera_id, f"bulk_{normalized_action.replace('-', '_')}", "error", str(error), source="hub")
+                results.append({"camera_id": camera_id, "status": "error", "detail": str(error)})
+
+        success_count = sum(1 for item in results if item["status"] == "success")
+        error_count = len(results) - success_count
+        return {
+            "action": normalized_action,
+            "total": len(results),
+            "success_count": success_count,
+            "error_count": error_count,
+            "results": results,
+        }
 
     def unregister_camera(self, camera_id: str) -> dict[str, Any]:
         resolved = self._resolve_camera_id(camera_id) or camera_id.strip().lower()
@@ -2943,11 +4193,14 @@ class Hub:
         if camera.api_status == "offline" and api_error == "Native API is not available on this camera build.":
             api_status = "unsupported"
         preview_state = self._camera_preview_state(camera)
+        camera_image_id = self._camera_image_id_for_ui(camera)
         return {
             "camera_id": camera.camera_id,
             "name": camera.name,
             "hostname": camera.hostname or "n/a",
             "ip": camera.ip or "",
+            "camera_image_id": camera_image_id,
+            "ota_upgrade_command": self._camera_ota_upgrade_command_for_ui(camera),
             "snapshot_url": (self._camera_snapshot_url(camera) or "") if live_links_available else "",
             "web_ui_url": self._camera_web_ui_url(camera) if live_links_available else "",
             "api_base_url": self._camera_api_base_url(camera) if live_links_available else "",
@@ -2985,7 +4238,24 @@ class Hub:
             "override_onvif_username": override.get("onvif_username", ""),
             "override_onvif_password": override.get("onvif_password", ""),
             "native_action_history": self._native_action_history_for_ui(resolved),
+            "hub_connected": bool(camera.api_token.strip()),
+            "default_onvif_username": self.default_onvif_username,
+            "default_onvif_password": self.default_onvif_password,
         }
+
+    def _camera_image_id_for_ui(self, camera: Camera) -> str:
+        for candidate in (camera.api_device_model, camera.onvif_model):
+            value = str(candidate or "").strip()
+            if value:
+                return value
+        return ""
+
+    def _camera_ota_upgrade_command_for_ui(self, camera: Camera) -> str:
+        camera_image_id = self._camera_image_id_for_ui(camera)
+        camera_ip = str(camera.ip or "").strip()
+        if not camera_image_id or not camera_ip:
+            return ""
+        return f"CAMERA={camera_image_id} IP={camera_ip} make cleanbuild upgrade_ota"
 
     def _timestamp_is_recent(self, timestamp: int | None, window_seconds: int) -> bool:
         if timestamp is None or window_seconds <= 0:
@@ -3188,25 +4458,10 @@ class Hub:
         return len(target_ids), published
 
     def _publish_control_command(self, camera_id: str, command: str) -> bool:
-        if not self._connect_mqtt() or self.mqtt_client is None:
-            return False
-
-        payload = {
-            "request_id": uuid.uuid4().hex,
-            "chat_id": 0,
-            "username": "",
-            "camera_id": camera_id,
-            "command": command,
-            "args": [],
-            "raw_text": command,
-            "sent_at": int(time.time()),
-        }
-        topic = self.command_topic_template.format(camera_id=camera_id)
-        info = self.mqtt_client.publish(topic, json.dumps(payload), qos=1)
-        info.wait_for_publish()
-        if info.rc == mqtt.MQTT_ERR_SUCCESS:
+        result = self._publish_camera_command(camera_id, command)
+        if result["published"]:
             return True
-        LOG.warning("Failed to publish %s request for %s: rc=%s", command, camera_id, info.rc)
+        LOG.warning("Failed to publish %s request for %s", command, camera_id)
         return False
 
     def _format_timestamp(self, timestamp: float | None) -> str:
@@ -3221,6 +4476,27 @@ class Hub:
             return int(value)
         except (TypeError, ValueError):
             return None
+
+    def _format_stream_control_value(
+        self,
+        stream_config: dict[str, Any],
+        field_name: str,
+        *,
+        zero_means_unset: bool = False,
+        fallback_value: Any = None,
+    ) -> str:
+        if field_name not in stream_config:
+            return ""
+        value = self._coerce_int(stream_config.get(field_name))
+        if value is None:
+            raw_value = str(stream_config.get(field_name) or "").strip()
+            return raw_value
+        if zero_means_unset and value <= 0:
+            fallback = self._coerce_int(fallback_value)
+            if fallback is not None and fallback > 0:
+                return str(fallback)
+            return ""
+        return str(value)
 
     def _coerce_bool(self, value: Any) -> bool | None:
         if isinstance(value, bool):

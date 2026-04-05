@@ -27,7 +27,7 @@
         </div>
       </div>
 
-      <p class="small text-body-secondary">API probe samples retain normalized fields for streamer state, network reachability, motion, privacy, day/night mode, and IP so the hub can render charts without re-parsing old blobs.</p>
+      <p class="small text-body-secondary">API probe samples retain normalized fields for streamer state, network reachability, motion, privacy, current and target day/night mode, and IP so the hub can render charts without re-parsing old blobs.</p>
 
     {% if camera.charts %}
       <section class="row g-3 mb-4">
@@ -75,7 +75,7 @@
           <div class="border rounded p-3 h-100">
             <div class="small text-body-secondary mb-1">Shown Rows</div>
             <div class="h4 mb-0">{{ camera.timeline | length }}</div>
-            <div class="small text-body-secondary">{{ camera.timeline_action_count }} actions / {{ camera.timeline_state_count }} state samples</div>
+            <div class="small text-body-secondary">{{ camera.timeline_action_count }} actions / {{ camera.timeline_state_count }} state samples / {{ camera.timeline_config_count or 0 }} config changes</div>
           </div>
         </article>
         <article class="col-12 col-md-4">
@@ -109,6 +109,7 @@
             <option value="all" {% if camera.history_kind_filter == 'all' %}selected{% endif %}>All</option>
             <option value="action" {% if camera.history_kind_filter == 'action' %}selected{% endif %}>Actions only</option>
             <option value="state" {% if camera.history_kind_filter == 'state' %}selected{% endif %}>State samples only</option>
+            <option value="config" {% if camera.history_kind_filter == 'config' %}selected{% endif %}>Config changes only</option>
           </select>
         </div>
         <div class="col-12 col-md-3">
@@ -153,6 +154,8 @@
                 <span class="badge text-bg-success">success</span>
               {% elif entry.status == 'error' %}
                 <span class="badge text-bg-danger">error</span>
+              {% elif entry.status == 'info' %}
+                <span class="badge text-bg-info">info</span>
               {% else %}
                 <span class="badge text-bg-secondary">{{ entry.status }}</span>
               {% endif %}

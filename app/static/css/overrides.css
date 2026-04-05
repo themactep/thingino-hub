@@ -708,3 +708,9 @@ i {
 	filter: grayscale(1) sepia(0.5) hue-rotate(-20deg) saturate(0.75) brightness(0.85);
 	opacity: 0.82;
 }
+
+::placeholder {
+	color: var(--bs-secondary-color) !important;
+	font-style: italic;
+	opacity: 0.6 !important;
+}

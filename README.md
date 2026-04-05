@@ -184,8 +184,11 @@ The hub now includes a small server-rendered admin UI.
 
 Pages:
 
-- `/` dashboard with Telegram status, MQTT status, reload button, and a camera roster with preview snapshots
-- `/camera/<camera_id>` individual camera page with metadata, ONVIF device details, snapshot preview, rescan, and local override fields such as display name
+- `/` dashboard with the camera roster, preview snapshots, and fleet actions
+- `/status` dedicated status page for Telegram, MQTT, polling, registration, history, and related runtime cards
+- `/events` dedicated live event feed page for hub actions, registrations, and camera-agent events
+- `/enroll` enrollment page with a primary credentials-first connect flow plus advanced probe and pairing helpers
+- `/camera/<camera_id>` individual camera page with metadata, ONVIF device details, snapshot preview, rescan, connect/pair/delete actions, OTA rebuild command, and local override fields such as display name
 - `/camera/<camera_id>/history` database-backed timeline of native actions and stored probe/state samples
 - `/config` editor for Telegram, MQTT, routing, and static camera overrides
 - `/snapshot/<camera_id>` preview route that serves the latest cached snapshot or a fallback image
@@ -196,7 +199,8 @@ Notes:
 - the runtime camera registry is stored separately in `data/camera-state.yaml` by default when using the provided container launchers
 - `Save and Reload` applies the new config to the running process
 - `Rescan Cameras` asks known cameras to publish fresh registration metadata over MQTT
-- `Delete` removes saved overrides, asks the camera to revoke its own registration, drops the camera from the current roster, and tries to clear its retained MQTT registration topic
+- roster cards no longer carry their own action buttons; use the preview or camera name to open the detail page
+- `Delete` lives on the camera detail page and removes saved overrides, asks the camera to revoke its own registration, drops the camera from the current roster, and tries to clear its retained MQTT registration topic
 - auto-registered cameras remain runtime-discovered; camera pages can save per-camera overrides such as name, IP, snapshot URL, API key, native API base URL, native API token, ONVIF endpoint, and ONVIF credentials
 - by default the UI is bound to localhost through Podman port mapping
 - `ui.registration_stale_after_seconds` controls how long a retained `online` registration stays fresh before the dashboard shows that camera as `offline`; the default is `0` because many camera setups only publish registration on boot, not as a heartbeat
@@ -206,6 +210,12 @@ Notes:
 - `history.enabled` enables a local SQLite-backed history store for native actions and coarse state samples
 - `history.path` overrides the SQLite database path; when empty, the hub uses a default database next to `config.yaml`
 - `history.recent_actions_limit` controls how many recent database-backed native actions are shown on each camera detail page
+- the live event feed merges hub actions, MQTT registrations, and native camera-agent `/events` activity into one stream on the dedicated `/events` page
+- bulk actions currently support queued API/ONVIF/snapshot refreshes, MQTT rescan requests, and first-pass streaming service start/stop/restart operations across selected cameras
+- the primary enrollment path is `Connect Camera`: provide the camera IP and valid Web UI / ONVIF credentials, and the hub resolves the discovered camera identity, repairs pairing if needed, stores the generated bearer token, and hydrates the camera state in one step
+- the enrollment page still exposes advanced helpers for probe, pairing repair, and showing the generated pairing details when you need to inspect the bootstrap payload
+- camera detail pages include a `Connect to Hub` form that reuses the discovered roster entry and only asks for credentials, a `Pair` button for direct MQTT bootstrap repair, and a copyable OTA rebuild command in the form `CAMERA=<camera_image_id> IP=<camera_ip> make cleanbuild upgrade_ota`
+- partial override saves preserve existing auth and token values, so editing a display name or another single field no longer clears unrelated credentials
 - ONVIF device info refreshes on startup, on registration refresh, and on demand from the camera detail page; by default the hub tries `http://<camera-ip>/onvif/device_service` when no explicit endpoint is configured
 - camera detail pages render from cached supported-controls data first, then hydrate native API and ONVIF details in the background so the page stays responsive while fresher state arrives
 - quick controls and camera-page refresh buttons use narrow JSON responses or queued acknowledgements rather than full camera payloads where possible
@@ -246,6 +256,7 @@ python -m unittest -v tests.test_web_routes
 
 Current coverage focuses on route behavior that should stay small and non-blocking:
 
+- dashboard rendering, event feed snapshots, bulk-action summaries, and enrollment responses
 - camera detail hydration payloads
 - full cached camera payload fetches
 - minimal quick-action deltas for day/night and privacy
@@ -339,6 +350,8 @@ For dashboard status, an `online` registration is only treated as stale when `ui
 When `ui.snapshot_heartbeat_interval_seconds` is above `0`, the hub refreshes each camera's effective snapshot URL in the background on that interval. A successful image fetch marks the camera online and updates the locally cached preview image. If a later probe fails, the most recent cached preview can still be shown with a muted stale treatment until `ui.snapshot_cache_stale_after_seconds` is exceeded, after which the placeholder image is used instead.
 
 If a camera was registered before newer metadata such as `snapshot_url` was added, use the dashboard `Rescan Cameras` button after updating the camera-side agent. The hub sends a `register` command over MQTT and the camera republishes its retained registration payload.
+
+Once a camera is visible in the roster, the preferred next step is to open its detail page or visit `/enroll` and use the connect flow with valid credentials. You do not need to type a camera ID manually.
 
 Example registration payload:
 
@@ -454,12 +467,19 @@ The hub also accepts:
 
 ## Camera IDs
 
-Use a stable per-camera ID. For Thingino, the best fit is the existing `camera_id` value already used in the web UI metadata path, which is the MAC address without colons.
+The hub uses the camera identity from MQTT registration and command topics:
 
-Examples:
+- registration: `thingino/cam/<camera_id>/hello`
+- commands: `thingino/cam/<camera_id>/cmd`
 
-- `aabbccddeeff`
-- `112233445566`
+For current Thingino agent builds, that ID is the agent-style `%id` value exposed by `mqtt-sub`, which resolves to the SoC serial style identifier used by the camera agent and the hub roster.
+
+Do not use these values for hub enrollment or pairing identity:
+
+- native API `/api/v1/device.id`
+- legacy WebUI / CGI `camera_id`
+
+The connect and enroll flows resolve the authoritative hub camera ID from the current roster automatically, so the user only needs the camera IP and valid credentials.
 
 ## Access Control
 
@@ -511,6 +531,7 @@ That camera-side agent currently supports:
 - Verify the MQTT broker settings
 - Confirm the camera is subscribed to `thingino/cam/<camera_id>/cmd`
 - Check that the camera-side agent understands the JSON payload format
+- If the camera is auto-discovered but not fully connected yet, use `Connect to Hub` on the camera page or `/enroll`; the hub can repair the camera-side MQTT command subscription and reinstall the pairing bootstrap when credentials are valid
 
 ### Replies never come back to Telegram
 
