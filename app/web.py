@@ -278,6 +278,7 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
         camera_id: str | None = None,
         camera_payload: dict[str, Any] | None = None,
         status_code: int = 200,
+        reload: bool = False,
     ) -> Response:
         if wants_json_response():
             payload: dict[str, Any] = {
@@ -286,6 +287,8 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
                 "category": category,
                 "redirect_url": redirect_url,
             }
+            if reload:
+                payload["reload"] = True
             if camera_payload is not None:
                 payload["camera"] = camera_payload
             elif camera_id is not None:
@@ -676,6 +679,7 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
                 "success",
                 url_for("camera_detail", camera_id=camera_id),
                 camera_id=camera_id,
+                reload=True,
             )
         except Exception as error:
             return action_response(

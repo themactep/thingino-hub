@@ -1387,6 +1387,10 @@
           });
           const payload = await response.json();
           showFeedback(payload.message || 'Action completed.', payload.category || (response.ok ? 'success' : 'error'));
+          if (payload.reload && response.ok) {
+            setTimeout(() => window.location.reload(), 300);
+            return;
+          }
           if (payload.camera) {
             updateCameraState(payload.camera);
           }
