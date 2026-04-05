@@ -31,6 +31,135 @@
     <p class="text-body-secondary mb-0">{{ camera.hostname or 'unknown host' }}{% if camera.ip %} / {{ camera.ip }}{% endif %}{% if camera.api_device_model %} / {{ camera.api_device_model }}{% endif %}</p>
   </section>
 
+  {% if camera.hub_connected %}
+  {% set dn_mode = camera.native_daynight_requested_mode or 'auto' %}
+  <div id="camera-control-bar" class="mb-4 d-flex flex-wrap gap-1">
+
+    {# Motion #}
+    {% if camera.native_motion_supported %}
+    <button type="button" id="cb-motion-btn"
+            class="btn btn-sm {{ 'btn-primary' if camera.native_motion_enabled else 'btn-secondary' }}"
+            data-cb-motion-toggle
+            aria-pressed="{{ 'true' if camera.native_motion_enabled else 'false' }}"
+            title="Toggle motion detection">
+      <i class="bi bi-person-walking"></i> Motion
+    </button>
+    {% endif %}
+
+    {# Privacy #}
+    {% if camera.native_privacy_supported %}
+    {% set privacy_new = 'false' if camera.native_privacy_enabled else 'true' %}
+    <button type="button" id="cb-privacy-btn"
+            class="btn btn-sm {{ 'btn-primary active' if camera.native_privacy_enabled else 'btn-secondary' }}"
+            data-async-action="{{ url_for('set_privacy', camera_id=camera.camera_id) }}"
+            data-async-payload='{"privacy_enabled":"{{ privacy_new }}","privacy_channel":"all"}'
+            data-privacy-channel="all"
+            aria-pressed="{{ 'true' if camera.native_privacy_enabled else 'false' }}"
+            title="Toggle privacy mask">
+      <i class="bi bi-eye-slash"></i> Privacy
+    </button>
+    {% endif %}
+
+    {# Day/Night #}
+    {% if camera.native_daynight_action_supported %}
+    <div class="btn-group">
+      <button type="button" id="cb-daynight-btn"
+              class="btn btn-sm btn-secondary"
+              data-async-action="{{ url_for('set_daynight', camera_id=camera.camera_id) }}"
+              data-async-payload='{"daynight_mode":"{{ dn_mode }}"}'
+              title="Current day/night mode">
+        <i class="bi {{ 'bi-sun' if dn_mode == 'day' else 'bi-moon' if dn_mode == 'night' else 'bi-circle-half' }}" id="cb-daynight-icon"></i>
+        <span id="cb-daynight-label">{{ dn_mode }}</span>
+      </button>
+      <button type="button"
+              class="btn btn-sm btn-secondary dropdown-toggle dropdown-toggle-split"
+              data-bs-toggle="dropdown" aria-expanded="false">
+        <span class="visually-hidden">Day/night options</span>
+      </button>
+      <ul class="dropdown-menu">
+        {% for mode in (camera.native_daynight_modes or ['auto', 'day', 'night']) %}
+        <li>
+          <button type="button"
+                  class="dropdown-item {{ 'active' if camera.native_daynight_requested_mode == mode else '' }}"
+                  data-async-action="{{ url_for('set_daynight', camera_id=camera.camera_id) }}"
+                  data-async-payload='{"daynight_mode":"{{ mode }}"}'
+                  data-daynight-mode-button="{{ mode }}">
+            <i class="bi {{ 'bi-sun' if mode == 'day' else 'bi-moon' if mode == 'night' else 'bi-magic' }}"></i>
+            {{ mode|capitalize }}
+          </button>
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+
+    {# Snapshot #}
+    <button type="button"
+            class="btn btn-sm btn-secondary"
+            data-async-action="{{ url_for('refresh_snapshot', camera_id=camera.camera_id) }}"
+            title="Capture snapshot">
+      <i class="bi bi-camera"></i> Snapshot
+    </button>
+
+    {# Record #}
+    {% if camera.native_controls_available %}
+    <div class="btn-group">
+      <button type="button"
+              class="btn btn-sm btn-secondary"
+              data-async-action="{{ url_for('record_clip', camera_id=camera.camera_id) }}"
+              data-async-payload='{"record_stream_id":"0","record_duration_seconds":"10"}'
+              title="Record main stream (10s)">
+        <i class="bi bi-camera-reels"></i> Rec ch0
+      </button>
+      <button type="button"
+              class="btn btn-sm btn-secondary"
+              data-async-action="{{ url_for('record_clip', camera_id=camera.camera_id) }}"
+              data-async-payload='{"record_stream_id":"1","record_duration_seconds":"10"}'
+              title="Record substream (10s)">
+        ch1
+      </button>
+    </div>
+    {% endif %}
+
+    {# Send… #}
+    {% if camera.native_send2_available and camera.native_send2_services %}
+    <div class="btn-group">
+      <button type="button"
+              class="btn btn-sm btn-secondary dropdown-toggle"
+              data-bs-toggle="dropdown" aria-expanded="false"
+              title="Send photo or video via configured service">
+        <i class="bi bi-send"></i> Send…
+      </button>
+      <ul class="dropdown-menu">
+        {% for service in camera.native_send2_services %}
+          {% if service.photo_enabled %}
+          <li>
+            <button type="button" class="dropdown-item"
+                    data-send2-test-action="{{ url_for('send2_test', camera_id=camera.camera_id, service_name=service.name) }}"
+                    data-send2-service-label="{{ service.label }} photo"
+                    data-send2-type="photo">
+              <i class="bi bi-image"></i> {{ service.label }} photo
+            </button>
+          </li>
+          {% endif %}
+          {% if service.video_enabled %}
+          <li>
+            <button type="button" class="dropdown-item"
+                    data-send2-test-action="{{ url_for('send2_test', camera_id=camera.camera_id, service_name=service.name) }}"
+                    data-send2-service-label="{{ service.label }} video"
+                    data-send2-type="video">
+              <i class="bi bi-film"></i> {{ service.label }} video
+            </button>
+          </li>
+          {% endif %}
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+
+  </div>
+  {% endif %}
+
       {% if not camera.hub_connected %}
       <div class="border rounded p-3 mb-4">
         <h3 class="h6 mb-2">Connect to Hub</h3>
@@ -993,6 +1122,19 @@
         button.classList.toggle('btn-primary', enabled);
         button.classList.toggle('active', enabled);
         button.classList.toggle('btn-outline-secondary', !enabled);
+
+        const cbPrivacy = document.getElementById('cb-privacy-btn');
+        if (cbPrivacy) {
+          cbPrivacy.setAttribute('data-async-payload', JSON.stringify({
+            privacy_enabled: enabled ? 'false' : 'true',
+            privacy_channel: cbPrivacy.getAttribute('data-privacy-channel') || 'all',
+          }));
+          cbPrivacy.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+          cbPrivacy.disabled = !camera.native_privacy_supported;
+          cbPrivacy.classList.toggle('btn-primary', enabled);
+          cbPrivacy.classList.toggle('active', enabled);
+          cbPrivacy.classList.toggle('btn-secondary', !enabled);
+        }
       }
 
       function updateDaynight(camera) {
@@ -1020,6 +1162,19 @@
         }
         if (runningInline) {
           runningInline.textContent = camera.native_daynight_running_mode || 'unknown';
+        }
+
+        const cbLabel = document.getElementById('cb-daynight-label');
+        if (cbLabel) {
+          cbLabel.textContent = requestedMode;
+        }
+        const cbIcon = document.getElementById('cb-daynight-icon');
+        if (cbIcon) {
+          cbIcon.className = `bi ${requestedMode === 'day' ? 'bi-sun' : requestedMode === 'night' ? 'bi-moon' : 'bi-circle-half'}`;
+        }
+        const cbBtn = document.getElementById('cb-daynight-btn');
+        if (cbBtn) {
+          cbBtn.setAttribute('data-async-payload', JSON.stringify({ daynight_mode: requestedMode }));
         }
       }
 
@@ -1052,6 +1207,13 @@
         const motionEnabled = document.getElementById('motion_enabled');
         if (motionEnabled) {
           motionEnabled.checked = Boolean(camera.native_motion_enabled);
+        }
+        const cbMotion = document.getElementById('cb-motion-btn');
+        if (cbMotion) {
+          const active = Boolean(camera.native_motion_enabled);
+          cbMotion.classList.toggle('btn-primary', active);
+          cbMotion.classList.toggle('btn-secondary', !active);
+          cbMotion.setAttribute('aria-pressed', active ? 'true' : 'false');
         }
         const imageHflip = document.getElementById('image_hflip');
         if (imageHflip) {
@@ -1660,6 +1822,21 @@
           await submitMotionToggle(motionEnabled, previousChecked);
         });
       }
+
+      document.querySelectorAll('[data-cb-motion-toggle]').forEach((button) => {
+        button.addEventListener('click', async () => {
+          const checkbox = document.getElementById('motion_enabled');
+          if (!checkbox || checkbox.disabled) {
+            return;
+          }
+          const previousChecked = checkbox.checked;
+          checkbox.checked = !checkbox.checked;
+          button.classList.toggle('btn-primary', checkbox.checked);
+          button.classList.toggle('btn-secondary', !checkbox.checked);
+          button.setAttribute('aria-pressed', checkbox.checked ? 'true' : 'false');
+          await submitMotionToggle(checkbox, previousChecked);
+        });
+      });
 
       document.querySelectorAll('[data-send2-motion-toggle="true"]').forEach((checkbox) => {
         checkbox.addEventListener('change', async () => {
