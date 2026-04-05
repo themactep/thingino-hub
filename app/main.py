@@ -418,6 +418,7 @@ class Hub:
             self.registration_stale_after_seconds = max(0, int(config.get("ui", {}).get("registration_stale_after_seconds", 0)))
             self.snapshot_heartbeat_interval_seconds = max(0, int(config.get("ui", {}).get("snapshot_heartbeat_interval_seconds", 60)))
             self.snapshot_heartbeat_timeout_seconds = max(1, int(config.get("ui", {}).get("snapshot_heartbeat_timeout_seconds", 5)))
+            self.api_probe_interval_seconds = max(0, int(config.get("ui", {}).get("api_probe_interval_seconds", 300)))
             self.snapshot_cache_stale_after_seconds = max(0, int(config.get("ui", {}).get("snapshot_cache_stale_after_seconds", 3600)))
             defaults_cfg = config.get("defaults") or {}
             self.default_onvif_username = str(defaults_cfg.get("onvif_username") or DEFAULT_THINGINO_USERNAME).strip()
@@ -550,7 +551,14 @@ class Hub:
         ip = str(decoded.get("ip") or (existing.ip if existing else "")).strip()
         snapshot_url = str(decoded.get("snapshot_url") or (existing.snapshot_url if existing else "")).strip()
         api_key = str(decoded.get("api_key") or (existing.api_key if existing else "")).strip()
-        api_base_url = str(decoded.get("api_base_url") or (existing.api_base_url if existing else "")).strip()
+        incoming_api_base_url = str(decoded.get("api_base_url") or "").strip()
+        existing_api_base_url = str(existing.api_base_url if existing else "").strip()
+        # Don't let a camera re-registration downgrade https:// to http:// — the
+        # registration may carry a pre-bootstrap URL (TLS was off at last boot).
+        if existing_api_base_url.startswith("https://") and incoming_api_base_url.startswith("http://"):
+            api_base_url = existing_api_base_url
+        else:
+            api_base_url = incoming_api_base_url or existing_api_base_url
         api_token = str(decoded.get("api_token") or (existing.api_token if existing else "")).strip()
         onvif_endpoint = str(decoded.get("onvif_endpoint") or decoded.get("onvif_url") or (existing.onvif_endpoint if existing else "")).strip()
         onvif_username = str(decoded.get("onvif_username") or (existing.onvif_username if existing else "")).strip()
@@ -2449,6 +2457,21 @@ class Hub:
             if self.stop_event.wait(wait_seconds):
                 return
 
+    def api_probe_loop(self) -> None:
+        while not self.stop_event.is_set():
+            interval = self.api_probe_interval_seconds
+            if interval <= 0:
+                self.stop_event.wait(5)
+                continue
+            with self.state_lock:
+                camera_ids = list(self.cameras.keys())
+            for camera_id in camera_ids:
+                if self.stop_event.is_set():
+                    return
+                self._schedule_api_refresh(camera_id)
+            if self.stop_event.wait(interval):
+                return
+
     def _probe_cameras(self) -> int:
         with self.state_lock:
             cameras = list(self.cameras.values())
@@ -3404,7 +3427,9 @@ class Hub:
                 "token": token,
             }
         }
-        api_base_url = entry["api_base_url"] or (f"https://{entry['ip']}:{port}/api/v1" if entry["ip"] else "")
+        # Bootstrap always enables TLS, so always use https:// for the saved URL.
+        # Ignore any pre-existing http:// URL — it predates bootstrap.
+        api_base_url = f"https://{entry['ip']}:{port}/api/v1" if entry["ip"] else entry["api_base_url"]
         bootstrap_json = json.dumps(bootstrap_payload, indent=2, sort_keys=True)
         compact_bootstrap_json = json.dumps(bootstrap_payload, sort_keys=True)
         token_json = json.dumps(token)
@@ -4354,6 +4379,7 @@ def main() -> int:
     web_server = WebServer(create_web_app(hub, ui_username=ui_username, ui_password=ui_password), ui_host, ui_port)
     hub_thread = threading.Thread(target=hub.start, name="telegrambothub-main", daemon=True)
     probe_thread = threading.Thread(target=hub.snapshot_probe_loop, name="telegrambothub-probe", daemon=True)
+    api_probe_thread = threading.Thread(target=hub.api_probe_loop, name="telegrambothub-api-probe", daemon=True)
 
     def handle_signal(_signum: int, _frame: Any) -> None:
         LOG.info("Stopping hub")
@@ -4366,8 +4392,9 @@ def main() -> int:
     LOG.info("Starting telegrambothub")
     hub_thread.start()
     probe_thread.start()
+    api_probe_thread.start()
     web_server.start()
-    while (hub_thread.is_alive() or probe_thread.is_alive()) and not hub.stop_event.wait(0.5):
+    while (hub_thread.is_alive() or probe_thread.is_alive() or api_probe_thread.is_alive()) and not hub.stop_event.wait(0.5):
         pass
     hub.stop()
     web_server.stop()
