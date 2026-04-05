@@ -105,6 +105,10 @@ history:
   path: ""
   recent_actions_limit: 20
 
+defaults:
+  onvif_username: "thingino"
+  onvif_password: "thingino"
+
 cameras:
   - id: "aabbccddeeff"
     name: "front-door"
@@ -113,12 +117,12 @@ cameras:
     snapshot_url: "http://192.168.1.50/x/ch0.jpg"
     api_key: ""
     onvif_endpoint: "http://192.168.1.50/onvif/device_service"
-    onvif_username: "admin"
-    onvif_password: ""
+    onvif_username: "thingino"
+    onvif_password: "thingino"
   - id: "112233445566"
     name: "garage"
-    onvif_username: "admin"
-    onvif_password: ""
+    onvif_username: "thingino"
+    onvif_password: "thingino"
 ```
 
 The `cameras` section is optional. If cameras publish retained registration messages on MQTT, the hub can discover them automatically.
@@ -322,7 +326,7 @@ If ONVIF credentials are omitted, the hub falls back to Thingino's default `thin
 
 Each camera needs an MQTT subscription that hands incoming payloads to the local Telegram camera agent. This subscription is configured in the camera firmware and does not require any manual setup from the hub.
 
-On Thingino cameras with the firmware-side agent installed, the required subscription is pre-configured:
+On Thingino cameras with the firmware-side agent installed, the required subscription is pre-configured at build time:
 
 ```text
 Topic:  thingino/cam/%id/cmd
@@ -330,6 +334,17 @@ Action: telegram-cam-agent "$MQTT_PAYLOAD"
 ```
 
 The `%id` shorthand resolves to the camera SoC serial number first, with MAC-based fallback, which matches the `camera_id` used by the hub. The hub communicates with cameras exclusively via MQTT commands, ONVIF, and the native camera agent API — it does not access any camera-side web UI or CGI endpoints.
+
+### Pairing and Native Agent Bootstrap
+
+When you connect a camera to the hub, the hub sends an `install-agent-bootstrap` command over MQTT. That command delivers:
+
+- a generated bearer token for the native camera agent API
+- the hub's MQTT broker host, port, username, and password
+
+The camera-side `telegram-cam-agent` script writes these values into `/etc/thingino-agent-bootstrap.json` and restarts the agent service. On restart the agent merges the bootstrap config into `/etc/thingino.json` using the `jct import` tool, enabling TLS, setting the listen address to `0.0.0.0`, and configuring the MQTT subscription broker so the camera reconnects to the hub's broker automatically after a reboot.
+
+After bootstrap the hub probes the agent on `https://<camera-ip>:1998/api/v1`, stores the bearer token, and marks the camera connected. No manual broker or agent configuration on the camera is required.
 
 ### Auto-registration
 
