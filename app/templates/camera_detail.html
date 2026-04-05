@@ -1076,20 +1076,22 @@
       }
 
       function updatePrivacy(camera) {
-        const button = document.getElementById('privacy-toggle-button');
-        if (!button) {
-          return;
-        }
         const enabled = Boolean(camera.native_privacy_enabled);
-        button.setAttribute('data-async-payload', JSON.stringify({
+        const payload = {
           privacy_enabled: enabled ? 'false' : 'true',
-          privacy_channel: button.getAttribute('data-privacy-channel') || 'all',
-        }));
-        button.setAttribute('aria-pressed', enabled ? 'true' : 'false');
-        button.disabled = !camera.native_privacy_supported;
-        button.classList.toggle('btn-primary', enabled);
-        button.classList.toggle('active', enabled);
-        button.classList.toggle('btn-outline-secondary', !enabled);
+          privacy_channel: 'all',
+        };
+
+        const button = document.getElementById('privacy-toggle-button');
+        if (button) {
+          payload.privacy_channel = button.getAttribute('data-privacy-channel') || 'all';
+          button.setAttribute('data-async-payload', JSON.stringify(payload));
+          button.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+          button.disabled = !camera.native_privacy_supported;
+          button.classList.toggle('btn-primary', enabled);
+          button.classList.toggle('active', enabled);
+          button.classList.toggle('btn-outline-secondary', !enabled);
+        }
 
         const cbPrivacy = document.getElementById('cb-privacy-btn');
         if (cbPrivacy) {
