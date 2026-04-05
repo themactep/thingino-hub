@@ -222,29 +222,6 @@
             <span class="badge rounded-pill {{ 'text-bg-success' if camera.status == 'online' else 'text-bg-danger' }}" data-camera-field="status">{{ camera.status }}</span>
           </div>
 
-          <div class="border rounded p-3 mb-3">
-            <div class="d-flex justify-content-between align-items-start gap-3 mb-2">
-              <div>
-                <h3 class="h6 mb-1">Day/Night</h3>
-                <p class="small text-body-secondary mb-0">Quick mode requests for the native day/night action.</p>
-              </div>
-              <span class="small text-body-secondary">Running: <span id="daynight-running-mode-inline">{{ camera.native_daynight_running_mode or 'unknown' }}</span></span>
-            </div>
-            <div class="btn-group w-100 mb-2" role="group" aria-label="Day night mode">
-              {% for mode in camera.native_daynight_modes %}
-                <button
-                  type="button"
-                  class="btn {% if camera.native_daynight_requested_mode == mode %}btn-primary{% else %}btn-outline-secondary{% endif %}"
-                  data-async-action="{{ url_for('set_daynight', camera_id=camera.camera_id) }}"
-                  data-async-payload='{"daynight_mode":"{{ mode }}"}'
-                  data-daynight-mode-button="{{ mode }}"
-                  {% if not camera.native_daynight_action_supported %}disabled{% endif %}>{{ 'Auto' if mode == 'auto' else mode|capitalize }}</button>
-              {% endfor %}
-            </div>
-            <div class="small text-body-secondary" id="daynight-requested-mode-text">Requested mode: {{ camera.native_daynight_requested_mode }}</div>
-            <div class="small text-body-secondary mt-2">Granular IR light and IR-cut controls are not exposed by the current native API capabilities, so the hub can only offer mode selection here.</div>
-          </div>
-
           <form action="{{ url_for('apply_supported_config', camera_id=camera.camera_id) }}" method="post" class="border rounded p-3 mb-3" data-async-form>
             <h3 class="h6 mb-3">Runtime Toggles</h3>
             <div class="row g-3">
