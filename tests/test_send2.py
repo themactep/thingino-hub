@@ -432,7 +432,19 @@ class Send2ControlsForUiTests(unittest.TestCase):
         self.assertTrue(svc["photo_enabled"])
         self.assertTrue(svc["video_enabled"])
 
-    def test_motion_enabled_comes_from_prudynt_config(self) -> None:
+    def test_photo_enabled_defaults_true_when_key_absent_from_send2_json(self) -> None:
+        """If send_photo is absent from send2.json, the firmware defaults to true.
+        The settings endpoint will return {"send_photo": true}, and hub must honour it."""
+        caps = {"send2": {"gphotos": {"send_photo": True, "send_video": True}}}
+        # Simulate firmware returning true (its default when key is absent)
+        settings = {
+            "send2/services/gphotos/send-photo": {"send_photo": True},
+            "send2/services/gphotos/send-video": {"send_video": False},
+        }
+        services = self._run(caps, settings)
+        self.assertTrue(self._service(services, "gphotos")["photo_enabled"])
+
+
         caps = {"send2": {"telegram": {"send_photo": True, "send_video": False}}}
         settings = {"send2/services/telegram/send-photo": {"send_photo": True}}
         services = self._run(caps, settings)
