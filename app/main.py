@@ -1210,6 +1210,10 @@ class Hub:
         detail = normalized_service
         if normalized_type:
             detail = f"{detail}.{normalized_type}"
+        if result.get("status") == "error":
+            error_msg = result.get("message") or f"{detail}: send2 test failed"
+            self._record_native_action(resolved, "send2_test", "error", error_msg)
+            raise RuntimeError(error_msg)
         self._record_native_action(resolved, "send2_test", "success", detail)
         return result
 
@@ -2118,6 +2122,11 @@ class Hub:
         motion = prudynt_config.get("motion") or {}
         daynight = prudynt_config.get("daynight") or {}
         state_daynight = (state_payload.get("daynight") or {})
+
+        # Build stream-name → live state dict from state_payload's streams list
+        for s in (state_payload.get("streams") or []):
+            if isinstance(s, dict) and isinstance(s.get("id"), int):
+                live_stream_payloads[f"stream{s['id']}"] = s
         state_privacy = (state_payload.get("privacy") or {})
         config_caps = capabilities.get("config") or {}
         control_caps = config_caps.get("controls") or {}

@@ -237,7 +237,7 @@ class Send2TestActionPathTests(unittest.TestCase):
 
         def fake_post_action(self_inner: CameraApiClient, path: str, payload: Any = None, timeout: Any = None) -> Any:
             captured.append(path)
-            return {"status": "accepted"}
+            return {"status": "ok"}
 
         with patch.object(CameraApiClient, "post_action", fake_post_action):
             self.hub.test_camera_send2_service("cam1", "telegram", send_type=send_type)
@@ -276,6 +276,22 @@ class Send2TestActionPathTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "accepted")
         self.assertTrue(result.get("timeout_waiting_for_response"))
+
+    def test_status_error_in_response_raises(self) -> None:
+        """Camera returning {"status":"error"} must be surfaced as an exception.
+
+        The agent listener returns HTTP 200 even when the adapter shell exits
+        non-zero; the hub must check the status field so the UI shows the
+        failure instead of silently swallowing it.
+        """
+        def error_response(self_inner: CameraApiClient, path: str, payload: Any = None, timeout: Any = None) -> Any:
+            return {"status": "error", "message": "send2 test failed"}
+
+        with patch.object(CameraApiClient, "post_action", error_response):
+            with self.assertRaises(RuntimeError) as ctx:
+                self.hub.test_camera_send2_service("cam1", "telegram", send_type="photo")
+
+        self.assertIn("send2 test failed", str(ctx.exception))
 
 
 # ---------------------------------------------------------------------------
