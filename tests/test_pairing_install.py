@@ -26,6 +26,7 @@ class PairingInstallTests(unittest.TestCase):
         hub = object.__new__(Hub)
         hub.cameras = {"cam1": Camera(camera_id="cam1", name="Test Camera", ip="192.168.1.2")}
         hub.state_lock = threading.Lock()
+        hub.config = {"mqtt": {"host": "192.168.1.10", "port": 1883, "username": "", "password": ""}}
         hub.command_reply_timeout_seconds = 5.0
 
         saved_enrollments: list[dict[str, str]] = []
@@ -72,6 +73,7 @@ class PairingInstallTests(unittest.TestCase):
         hub = object.__new__(Hub)
         hub.cameras = {"cam1": Camera(camera_id="cam1", name="Test Camera", ip="192.168.1.2")}
         hub.state_lock = threading.Lock()
+        hub.config = {"mqtt": {"host": "192.168.1.10", "port": 1883, "username": "", "password": ""}}
         hub.command_reply_timeout_seconds = 5.0
 
         saved_enrollments: list[dict[str, str]] = []

@@ -3468,10 +3468,16 @@ class Hub:
             ip=str(save_entry.get("ip") or camera.ip),
         )
 
+        mqtt_cfg = self.config.get("mqtt") or {}
+        mqtt_host = str(mqtt_cfg.get("host") or "").strip()
+        mqtt_port = str(int(mqtt_cfg.get("port") or 1883))
+        mqtt_username = str(mqtt_cfg.get("username") or "").strip()
+        mqtt_password = str(mqtt_cfg.get("password") or "")
+
         publish_result = self._publish_camera_command(
             resolved,
             "install-agent-bootstrap",
-            [str(bundle.get("api_token") or "")],
+            [str(bundle.get("api_token") or ""), mqtt_host, mqtt_port, mqtt_username, mqtt_password],
             wait_for_reply_seconds=max(float(self.command_reply_timeout_seconds), 20.0),
         )
         if not publish_result["published"]:
