@@ -1406,6 +1406,7 @@
 
       async function submitSend2Test(button) {
         button.disabled = true;
+        button.classList.add('btn-busy');
         const output = document.getElementById('send2-test-output');
         const serviceLabel = button.getAttribute('data-send2-service-label') || 'Send2 test';
         const sendType = button.getAttribute('data-send2-type') || '';
@@ -1438,10 +1439,9 @@
           renderSend2TestResult({ error: { message: error instanceof Error ? error.message : 'Send2 test failed.' } }, serviceLabel);
         } finally {
           button.disabled = false;
+          button.classList.remove('btn-busy');
         }
-      }
-
-      async function submitQuickControlForm(form, formData) {
+      }(form, formData) {
         const response = await fetch(form.action, {
           method: form.method || 'POST',
           body: formData,
