@@ -1136,10 +1136,10 @@ class Hub:
                 service_data = payload.get(service_name)
                 if isinstance(service_data, dict):
                     if "send_photo" in service_data:
-                        client.patch_setting(f"send2/services/{service_name}/send-photo", {"enabled": bool(service_data["send_photo"])})
+                        client.patch_setting(f"send2/services/{service_name}/send-photo", {"send_photo": bool(service_data["send_photo"])})
                         results.append(f"{service_name}.send_photo")
                     if "send_video" in service_data:
-                        client.patch_setting(f"send2/services/{service_name}/send-video", {"enabled": bool(service_data["send_video"])})
+                        client.patch_setting(f"send2/services/{service_name}/send-video", {"send_video": bool(service_data["send_video"])})
                         results.append(f"{service_name}.send_video")
         except Exception as error:
             self._record_native_action(resolved, "send2_config", "error", str(error))
