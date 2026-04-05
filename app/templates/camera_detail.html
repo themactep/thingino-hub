@@ -248,7 +248,7 @@
           <form action="{{ url_for('apply_supported_config', camera_id=camera.camera_id) }}" method="post" class="border rounded p-3 mb-3" data-async-form>
             <h3 class="h6 mb-3">Runtime Toggles</h3>
             <div class="row g-3">
-              <div class="col-12 col-sm-6 d-flex align-items-end">
+              <div class="col-12 col-sm-6 d-flex align-items-end d-none">
                 <div class="form-check form-switch mb-0">
                 {% if camera.native_motion_supported %}
                   <input type="hidden" name="motion_enabled_present" value="1">
@@ -256,15 +256,6 @@
                   <input class="form-check-input" id="motion_enabled" type="checkbox" name="motion_enabled" {% if camera.native_motion_enabled %}checked{% endif %} {% if not camera.native_motion_supported %}disabled{% endif %}>
                   <label class="form-check-label" for="motion_enabled">Motion detection</label>
                 </div>
-              </div>
-              <div class="col-12 col-sm-6 d-flex align-items-end">
-                <button type="button" id="privacy-toggle-button"
-                  data-async-action="{{ url_for('set_privacy', camera_id=camera.camera_id) }}"
-                  data-privacy-channel="all"
-                  data-async-payload='{"privacy_enabled":"{{ 'false' if camera.native_privacy_enabled else 'true' }}","privacy_channel":"all"}'
-                  class="btn w-100 {% if camera.native_privacy_enabled %}btn-primary active{% else %}btn-outline-secondary{% endif %}"
-                  aria-pressed="{{ 'true' if camera.native_privacy_enabled else 'false' }}"
-                  {% if not camera.native_privacy_supported %}disabled{% endif %}>Privacy Mask</button>
               </div>
               <div class="col-12 col-md-4">
                 <div class="form-label mb-2">Anti-flicker</div>
