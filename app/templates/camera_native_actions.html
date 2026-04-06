@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block content %}
+  {% set page_key = 'native-actions' %}
+  {% set page_label = 'Native Actions' %}
+  {% set page_meta = camera.camera_id ~ ((' / ' ~ camera.ip) if camera.ip else '') ~ ((' / ' ~ camera.status) if camera.status else '') %}
+  {% include '_camera_page_header.html' %}
+
+  <section class="card shadow-sm">
+    <div class="card-body">
+      <h2 class="card-title h4">Recent Native Actions</h2>
+      <p class="text-body-secondary">Actions started from the hub are recorded here so you can inspect the latest result without keeping the main camera page open.</p>
+    {% if camera.native_action_history %}
+      <div class="table-responsive">
+        <table class="table table-sm align-middle mb-0">
+          <thead>
+            <tr>
+              <th scope="col">When</th>
+              <th scope="col">Action</th>
+              <th scope="col">Status</th>
+              <th scope="col">Source</th>
+              <th scope="col">Detail</th>
+            </tr>
+          </thead>
+          <tbody>
+          {% for entry in camera.native_action_history %}
+            <tr>
+              <td class="text-nowrap">{{ entry.at or 'just now' }}</td>
+              <td class="text-capitalize">{{ entry.action }}</td>
+              <td>
+              {% if entry.status == 'success' %}
+                <span class="badge text-bg-success">success</span>
+              {% elif entry.status == 'error' %}
+                <span class="badge text-bg-danger">error</span>
+              {% else %}
+                <span class="badge text-bg-secondary">{{ entry.status }}</span>
+              {% endif %}
+              </td>
+              <td class="text-nowrap text-body-secondary">{{ entry.source or 'native_api' }}</td>
+              <td class="text-break">{{ entry.detail or 'n/a' }}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="text-body-secondary mb-0">No native actions have been issued from the hub for this camera yet.</p>
+    {% endif %}
+    </div>
+  </section>
+{% endblock %}

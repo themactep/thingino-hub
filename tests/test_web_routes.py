@@ -34,8 +34,14 @@ class FakeHub:
             "hostname": "test-cam",
             "ip": "192.168.1.2",
             "snapshot_url": "http://192.168.1.2/x/ch0.jpg",
+            "snapshot_ch1_url": "http://192.168.1.2/x/ch1.jpg",
+            "mjpeg_ch0_url": "http://192.168.1.2/x/ch0.mjpg",
+            "mjpeg_ch1_url": "http://192.168.1.2/x/ch1.mjpg",
+            "rtsp_ch0_url": "rtsp://192.168.1.2:554/ch0",
+            "rtsp_ch1_url": "rtsp://192.168.1.2:554/ch1",
             "web_ui_url": "http://192.168.1.2/",
             "api_base_url": "https://192.168.1.2:1998/api/v1",
+            "api_token": "",
             "api_key": "",
             "last_registration_at": "now",
             "last_probe_at": "now",
@@ -50,6 +56,15 @@ class FakeHub:
             "onvif_last_ok_at": "now",
             "onvif_last_error": "",
             "preview_version": "1",
+            "mqtt_command_status": "online",
+            "mqtt_command_capable": True,
+            "mqtt_command_last_error": "",
+            "present_on_mqtt_broker": True,
+            "has_agent": True,
+            "hub_connected": False,
+            "registered_on_hub": False,
+            "is_paired": False,
+            "setup_status": "connect",
             "override_name": "",
             "override_ip": "",
             "override_snapshot_url": "",
@@ -63,21 +78,216 @@ class FakeHub:
         }
         self.controls = {
             "native_controls_available": True,
+            "native_record_supported": True,
+            "native_daynight_supported": True,
+            "native_daynight_enabled": True,
+            "native_daynight_force_mode": "",
+            "native_daynight_total_gain_night_threshold": "3000",
+            "native_daynight_total_gain_day_threshold": "300",
+            "native_daynight_controls_color": True,
+            "native_daynight_controls_ircut": True,
+            "native_daynight_controls_ir850": True,
+            "native_daynight_controls_ir940": True,
+            "native_daynight_controls_white": False,
+            "native_daynight_schedule_enabled": False,
+            "native_daynight_schedule_start_at": "18:00",
+            "native_daynight_schedule_stop_at": "07:00",
+            "native_daynight_running_mode": "day",
             "native_daynight_action_supported": True,
             "native_daynight_requested_mode": "auto",
             "native_privacy_supported": True,
             "native_privacy_enabled": False,
+            "native_image_anti_flicker": "60hz",
+            "native_image_anti_flicker_supported": True,
+            "native_image_hflip": False,
+            "native_image_hflip_supported": True,
+            "native_image_vflip": False,
+            "native_image_vflip_supported": True,
+            "native_stream_controls": [
+                {
+                    "audio_enabled": True,
+                    "audio_enabled_supported": True,
+                    "bitrate": "3000",
+                    "bitrate_supported": True,
+                    "enabled": True,
+                    "enabled_supported": True,
+                    "format": "H264",
+                    "format_supported": True,
+                    "fps": "30",
+                    "fps_supported": True,
+                    "height": "1080",
+                    "height_supported": True,
+                    "label": "Main Stream",
+                    "mode": "CBR",
+                    "mode_supported": True,
+                    "name": "stream0",
+                    "osd_enabled": True,
+                    "osd_enabled_supported": True,
+                    "osd_time_enabled": True,
+                    "osd_time_enabled_supported": True,
+                    "osd_usertext_enabled": True,
+                    "osd_usertext_enabled_supported": True,
+                    "osd_usertext_format": "%hostname",
+                    "osd_usertext_format_supported": True,
+                    "osd_privacy_enabled": True,
+                    "osd_privacy_enabled_supported": True,
+                    "osd_privacy_fill_alpha": "255",
+                    "osd_privacy_fill_color": "#000000FF",
+                    "osd_privacy_fill_color_supported": True,
+                    "osd_privacy_fill_color_value": "#000000",
+                    "osd_privacy_stroke_alpha": "255",
+                    "osd_privacy_stroke_color": "#FFFFFFFF",
+                    "osd_privacy_stroke_color_supported": True,
+                    "osd_privacy_stroke_color_value": "#FFFFFF",
+                    "osd_privacy_text": "PRIVACY ENABLED",
+                    "osd_privacy_text_supported": True,
+                    "stream_id": 0,
+                    "width": "1920",
+                    "width_supported": True,
+                },
+                {
+                    "audio_enabled": False,
+                    "audio_enabled_supported": True,
+                    "bitrate": "640",
+                    "bitrate_supported": True,
+                    "enabled": True,
+                    "enabled_supported": True,
+                    "format": "H264",
+                    "format_supported": True,
+                    "fps": "15",
+                    "fps_supported": True,
+                    "height": "360",
+                    "height_supported": True,
+                    "label": "Substream",
+                    "mode": "VBR",
+                    "mode_supported": True,
+                    "name": "stream1",
+                    "osd_enabled": True,
+                    "osd_enabled_supported": True,
+                    "osd_time_enabled": False,
+                    "osd_time_enabled_supported": True,
+                    "osd_usertext_enabled": False,
+                    "osd_usertext_enabled_supported": True,
+                    "osd_usertext_format": "",
+                    "osd_usertext_format_supported": True,
+                    "osd_privacy_enabled": False,
+                    "osd_privacy_enabled_supported": True,
+                    "osd_privacy_fill_alpha": "255",
+                    "osd_privacy_fill_color": "#111111FF",
+                    "osd_privacy_fill_color_supported": True,
+                    "osd_privacy_fill_color_value": "#111111",
+                    "osd_privacy_stroke_alpha": "255",
+                    "osd_privacy_stroke_color": "#EEEEEEFF",
+                    "osd_privacy_stroke_color_supported": True,
+                    "osd_privacy_stroke_color_value": "#EEEEEE",
+                    "osd_privacy_text": "PRIVACY ENABLED",
+                    "osd_privacy_text_supported": True,
+                    "stream_id": 1,
+                    "width": "640",
+                    "width_supported": True,
+                }
+            ],
         }
+        self.config = {
+            "telegram": {
+                "token": "123456:token",
+                "api_url": "https://api.telegram.org",
+                "polling_timeout": 30,
+                "allowed_chat_ids": [],
+                "allowed_usernames": [],
+            },
+            "mqtt": {
+                "host": "mqtt.local",
+                "port": 1883,
+                "username": "",
+                "password": "",
+                "keepalive": 60,
+                "use_tls": False,
+            },
+            "routing": {
+                "command_topic": "thingino/cam/{camera_id}/cmd",
+                "reply_topic": "thingino/cam/+/reply",
+                "registration_topic": "thingino/cam/+/hello",
+            },
+            "ui": {
+                "username": "",
+                "password": "",
+                "competency_level": "basic",
+                "registration_stale_after_seconds": 0,
+                "snapshot_heartbeat_interval_seconds": 60,
+                "snapshot_heartbeat_timeout_seconds": 5,
+                "snapshot_cache_stale_after_seconds": 3600,
+            },
+            "history": {
+                "enabled": True,
+                "path": "",
+                "recent_actions_limit": 20,
+                "max_action_events_per_camera": 1000,
+                "max_state_samples_per_camera": 5000,
+            },
+            "cameras": [],
+        }
+        self.last_override_update = None
+        self.last_patch_payload = None
+        self.last_send2_payload = None
+        self.saved_config = None
+        self.reload_called = False
 
     def get_camera_for_ui(self, camera_id: str):
         if camera_id != "cam1":
             raise RuntimeError("Unknown camera")
+        self._sync_setup_status()
         return dict(self.camera)
 
     def get_camera_supported_controls_for_ui(self, camera_id: str):
         if camera_id != "cam1":
             raise RuntimeError("Unknown camera")
         return dict(self.controls)
+
+    def _sync_setup_status(self) -> None:
+        self.camera["present_on_mqtt_broker"] = bool(self.camera.get("present_on_mqtt_broker", True))
+        self.camera["is_paired"] = bool(self.camera.get("is_paired") or str(self.camera.get("api_token") or "").strip())
+        self.camera["hub_connected"] = bool(self.camera.get("hub_connected", self.camera.get("registered_on_hub", False))) or self.camera["is_paired"]
+        self.camera["registered_on_hub"] = self.camera["hub_connected"]
+        self.camera["has_agent"] = bool(self.camera.get("has_agent", self.camera.get("mqtt_command_status") == "online")) or self.camera["is_paired"]
+        self.camera["mqtt_command_capable"] = bool(self.camera["has_agent"])
+        if self.camera.get("is_paired"):
+            self.camera["setup_status"] = "paired"
+            return
+        if not self.camera.get("present_on_mqtt_broker"):
+            self.camera["setup_status"] = "unavailable"
+            return
+        if self.camera.get("mqtt_command_status") == "unknown":
+            self.camera["setup_status"] = "verifying"
+        elif not self.camera.get("has_agent"):
+            self.camera["setup_status"] = "unavailable"
+        elif not self.camera.get("registered_on_hub"):
+            self.camera["setup_status"] = "connect"
+        else:
+            self.camera["setup_status"] = "pair"
+
+    def export_config(self):
+        return {
+            "telegram": dict(self.config["telegram"]),
+            "mqtt": dict(self.config["mqtt"]),
+            "routing": dict(self.config["routing"]),
+            "ui": dict(self.config["ui"]),
+            "history": dict(self.config["history"]),
+            "cameras": list(self.config["cameras"]),
+        }
+
+    def save_config(self, config):
+        self.saved_config = config
+
+    def reload_config(self):
+        self.reload_called = True
+
+    def update_camera_override(self, camera_id: str, override: dict[str, str]) -> None:
+        if camera_id != "cam1":
+            raise RuntimeError("Unknown camera")
+        self.last_override_update = dict(override)
+        for key, value in override.items():
+            self.camera[f"override_{key}"] = value
 
     def list_recent_events_for_ui(self, limit: int = 40):
         return list(self.recent_events[:limit])
@@ -115,9 +325,65 @@ class FakeHub:
             raise RuntimeError("Unknown camera")
         if refresh_after:
             raise AssertionError("patch config route should be non-blocking")
+        self.last_patch_payload = payload
         if "motion" in payload:
             motion = payload.get("motion") or {}
             self.controls["native_motion_enabled"] = bool(motion.get("enabled"))
+        if "daynight" in payload:
+            daynight = payload.get("daynight") or {}
+            if "enabled" in daynight:
+                self.controls["native_daynight_enabled"] = bool(daynight.get("enabled"))
+            if "force_mode" in daynight:
+                self.controls["native_daynight_force_mode"] = daynight.get("force_mode") or ""
+            for field in ("total_gain_night_threshold", "total_gain_day_threshold"):
+                if field in daynight:
+                    self.controls[f"native_daynight_{field}"] = str(daynight.get(field) or "")
+            controls = daynight.get("controls") or {}
+            if isinstance(controls, dict):
+                for field in ("color", "ircut", "ir850", "ir940", "white"):
+                    if field in controls:
+                        self.controls[f"native_daynight_controls_{field}"] = bool(controls.get(field))
+            schedule = daynight.get("schedule") or {}
+            if isinstance(schedule, dict):
+                if "enabled" in schedule:
+                    self.controls["native_daynight_schedule_enabled"] = bool(schedule.get("enabled"))
+                if "start_at" in schedule:
+                    self.controls["native_daynight_schedule_start_at"] = schedule.get("start_at") or ""
+                if "stop_at" in schedule:
+                    self.controls["native_daynight_schedule_stop_at"] = schedule.get("stop_at") or ""
+        for stream_name, stream_payload in payload.items():
+            if not str(stream_name).startswith("stream") or not isinstance(stream_payload, dict):
+                continue
+            for stream in self.controls.get("native_stream_controls", []):
+                if stream.get("name") != stream_name:
+                    continue
+                for key, value in stream_payload.items():
+                    if key == "osd" and isinstance(value, dict):
+                        if "enabled" in value:
+                            stream["osd_enabled"] = bool(value.get("enabled"))
+                        if isinstance(value.get("time"), dict) and "enabled" in value["time"]:
+                            stream["osd_time_enabled"] = bool(value["time"].get("enabled"))
+                        if isinstance(value.get("usertext"), dict):
+                            if "enabled" in value["usertext"]:
+                                stream["osd_usertext_enabled"] = bool(value["usertext"].get("enabled"))
+                            if "format" in value["usertext"]:
+                                stream["osd_usertext_format"] = value["usertext"].get("format")
+                        if isinstance(value.get("privacy"), dict):
+                            privacy = value["privacy"]
+                            if "enabled" in privacy:
+                                stream["osd_privacy_enabled"] = bool(privacy.get("enabled"))
+                            if "text" in privacy:
+                                stream["osd_privacy_text"] = privacy.get("text") or ""
+                            if "fill_color" in privacy:
+                                stream["osd_privacy_fill_color"] = privacy.get("fill_color") or ""
+                                stream["osd_privacy_fill_color_value"] = str(privacy.get("fill_color") or "")[:7] or "#000000"
+                                stream["osd_privacy_fill_alpha"] = str(int(str(privacy.get("fill_color") or "#000000FF")[-2:], 16))
+                            if "stroke_color" in privacy:
+                                stream["osd_privacy_stroke_color"] = privacy.get("stroke_color") or ""
+                                stream["osd_privacy_stroke_color_value"] = str(privacy.get("stroke_color") or "")[:7] or "#000000"
+                                stream["osd_privacy_stroke_alpha"] = str(int(str(privacy.get("stroke_color") or "#000000FF")[-2:], 16))
+                        continue
+                    stream[key] = value
         history = list(self.camera.get("native_action_history") or [])
         history.insert(
             0,
@@ -131,6 +397,24 @@ class FakeHub:
         )
         self.camera["native_action_history"] = history[:8]
         return {"status": "accepted"}
+
+    def update_camera_send2_config(self, camera_id: str, payload):
+        if camera_id != "cam1":
+            raise RuntimeError("Unknown camera")
+        if self.camera.get("api_status") == "offline":
+            raise RuntimeError("Native API is offline for this camera.")
+        self.last_send2_payload = payload
+        return {"result": "accepted"}
+
+    def test_camera_send2_service(self, camera_id: str, service_name: str, *, verbose: bool = True, send_type: str = ""):
+        if camera_id != "cam1":
+            raise RuntimeError("Unknown camera")
+        return {
+            "message": {
+                "status": "success",
+                "output": f"send2 {service_name} {send_type or 'default'} verbose={verbose}",
+            }
+        }
 
     def perform_bulk_action(self, camera_ids, action: str):
         if action == "restart-streaming":
@@ -160,13 +444,21 @@ class FakeHub:
         }
 
     def connect_camera(self, enrollment):
+        if self.camera.get("mqtt_command_status") != "online":
+            raise RuntimeError(self.camera.get("mqtt_command_last_error") or "Camera did not respond to hub MQTT commands.")
         camera_id = enrollment.get("camera_id") or enrollment.get("id") or "cam2"
+        self.camera["hub_connected"] = True
+        self.camera["registered_on_hub"] = True
+        self.camera["is_paired"] = False
+        self.camera["override_onvif_username"] = enrollment.get("onvif_username") or ""
+        self.camera["override_onvif_password"] = enrollment.get("onvif_password") or ""
+        self._sync_setup_status()
         return {
             "camera_id": camera_id,
             "status": "success",
             "status_detail": f"Connected {camera_id} to the hub.",
             "api_base_url": f"https://{enrollment.get('ip') or '192.168.1.2'}:1998/api/v1",
-            "api_token": "connected-token-123",
+            "api_token": "",
         }
 
     def enroll_camera(self, enrollment):
@@ -241,8 +533,16 @@ class FakeHub:
         }
 
     def install_pairing_bundle_via_mqtt(self, enrollment):
+        if self.camera.get("mqtt_command_status") != "online":
+            raise RuntimeError(self.camera.get("mqtt_command_last_error") or "Camera did not respond to hub MQTT commands.")
         camera_id = enrollment.get("camera_id") or enrollment.get("id") or "cam2"
+        self.camera["hub_connected"] = True
+        self.camera["registered_on_hub"] = True
+        self.camera["api_status"] = "online"
         result = self.generate_pairing_bundle(enrollment)
+        self.camera["api_token"] = result["api_token"]
+        self.camera["is_paired"] = True
+        self._sync_setup_status()
         result.update(
             {
                 "status": "success",
@@ -292,6 +592,9 @@ class FakeHub:
                 "snapshot_url": "http://192.168.1.2/x/ch0.jpg",
                 "status": "online",
                 "api_status": "online",
+                "mqtt_command_status": self.camera.get("mqtt_command_status", "online"),
+                "mqtt_command_capable": self.camera.get("mqtt_command_capable", True),
+                "mqtt_command_last_error": self.camera.get("mqtt_command_last_error", ""),
                 "api_streamer": "prudynt",
                 "preview_state": "placeholder",
                 "hostname": "test-cam",
@@ -307,12 +610,22 @@ class FakeHub:
     def get_camera_history_for_ui(self, camera_id: str, limit: int = 100, kind_filter: str = "all", sample_type_filter: str = "all"):
         if camera_id != "cam1":
             raise RuntimeError("Unknown camera")
+        self._sync_setup_status()
         return {
             "camera_id": "cam1",
             "name": "Test Camera",
             "ip": "192.168.1.2",
             "status": "online",
-            "api_status": "online",
+            "api_status": self.camera.get("api_status", "online"),
+            "setup_status": self.camera.get("setup_status", "connect"),
+            "present_on_mqtt_broker": self.camera.get("present_on_mqtt_broker", True),
+            "has_agent": self.camera.get("has_agent", True),
+            "registered_on_hub": self.camera.get("registered_on_hub", False),
+            "is_paired": self.camera.get("is_paired", False),
+            "hub_connected": self.camera.get("hub_connected", False),
+            "mqtt_command_status": self.camera.get("mqtt_command_status", "online"),
+            "mqtt_command_capable": self.camera.get("mqtt_command_capable", True),
+            "mqtt_command_last_error": self.camera.get("mqtt_command_last_error", ""),
             "history_enabled": True,
             "history_db_path": "/tmp/history.sqlite3",
             "history_limit": limit,
@@ -385,17 +698,705 @@ class WebRouteTests(unittest.TestCase):
         self.assertEqual(payload["camera"]["camera_id"], "cam1")
         self.assertIn("native_daynight_requested_mode", payload["camera"])
 
-    def test_camera_detail_renders_copyable_ota_command(self) -> None:
+    def test_camera_detail_links_to_secondary_pages(self) -> None:
         response = self.client.get("/camera/cam1")
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
-        self.assertIn("Firmware Rebuild and OTA Command", body)
-        self.assertIn("CAMERA=wyze_cam3_t31x_gc2053_atbm6031 IP=192.168.1.2 make cleanbuild upgrade_ota", body)
-        self.assertIn("/pair/cam1", body)
-        self.assertIn(">Pair<", body)
+        self.assertIn('href="http://192.168.1.2/"', body)
+        self.assertIn('>Camera Web UI<', body)
+        self.assertNotIn('data-async-action="/pair/cam1"', body)
+        self.assertNotIn(">Pair<", body)
         self.assertIn("/connect/cam1", body)
         self.assertIn("Connect to Hub", body)
+        self.assertIn("Step 1 of 2", body)
+        self.assertIn('href="/camera/cam1/info"', body)
+        self.assertIn('href="/camera/cam1/settings"', body)
+        self.assertIn('href="/camera/cam1/send2"', body)
+        self.assertNotIn('href="/camera/cam1/overrides"', body)
+        self.assertNotIn('href="/camera/cam1/native-actions"', body)
+        self.assertNotIn('href="/camera/cam1/expert-config"', body)
+        self.assertIn("Camera Endpoints", body)
+        self.assertIn('data-copy-text="rtsp://192.168.1.2:554/ch0"', body)
+        self.assertIn('data-copy-text="rtsp://192.168.1.2:554/ch1"', body)
+        self.assertIn('data-copy-text="http://192.168.1.2/x/ch0.jpg"', body)
+        self.assertIn('data-copy-text="http://192.168.1.2/x/ch1.jpg"', body)
+        self.assertIn('data-copy-text="http://192.168.1.2/x/ch0.mjpg"', body)
+        self.assertIn('data-copy-text="http://192.168.1.2/x/ch1.mjpg"', body)
+
+    def test_camera_detail_shows_advanced_links_for_advanced_users(self) -> None:
+        self.hub.config["ui"]["competency_level"] = "advanced"
+
+        response = self.client.get("/camera/cam1")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn('href="/camera/cam1/overrides"', body)
+        self.assertIn('href="/camera/cam1/native-actions"', body)
+        self.assertNotIn('href="/camera/cam1/expert-config"', body)
+
+    def test_camera_detail_shows_expert_link_for_expert_users(self) -> None:
+        self.hub.config["ui"]["competency_level"] = "expert"
+
+        response = self.client.get("/camera/cam1")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn('href="/camera/cam1/overrides"', body)
+        self.assertIn('href="/camera/cam1/native-actions"', body)
+        self.assertIn('href="/camera/cam1/expert-config"', body)
+
+    def test_camera_info_page_renders_copyable_ota_command(self) -> None:
+        response = self.client.get("/camera/cam1/info")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Info &amp; ONVIF", body)
+        self.assertIn('href="http://192.168.1.2/"', body)
+        self.assertIn('>Camera Web UI<', body)
+        self.assertIn("Finish Camera Setup", body)
+        self.assertIn('action="/connect/cam1"', body)
+        self.assertIn('name="redirect_page" value="info"', body)
+        self.assertNotIn('action="/pair/cam1"', body)
+        self.assertIn('href="/camera/cam1"', body)
+        self.assertIn('href="/camera/cam1/settings"', body)
+        self.assertIn('href="/camera/cam1/history"', body)
+        self.assertIn("Camera Info", body)
+        self.assertIn("ONVIF", body)
+        self.assertIn("Firmware Rebuild and OTA Command", body)
+        self.assertIn('class="form-control font-monospace cb"', body)
+        self.assertIn('data-copy-text="CAMERA=wyze_cam3_t31x_gc2053_atbm6031 IP=192.168.1.2 make cleanbuild upgrade_ota"', body)
+        self.assertIn("CAMERA=wyze_cam3_t31x_gc2053_atbm6031 IP=192.168.1.2 make cleanbuild upgrade_ota", body)
+
+    def test_camera_overrides_page_saves_changes(self) -> None:
+        self.hub.config["ui"]["competency_level"] = "advanced"
+        response = self.client.post(
+            "/camera/cam1/overrides",
+            data={"name": "Front Door", "onvif_username": "thingino"},
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Camera Overrides", body)
+        self.assertIn("Saved camera overrides for cam1.", body)
+        self.assertEqual(self.hub.last_override_update, {"name": "Front Door", "onvif_username": "thingino"})
+
+    def test_camera_overrides_redirects_without_advanced_access(self) -> None:
+        response = self.client.get("/camera/cam1/overrides", follow_redirects=True)
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Advanced access is required for this camera maintenance page.", body)
+        self.assertIn("Long-Term Camera Settings", body)
+
+    def test_camera_settings_page_renders_long_term_controls(self) -> None:
+        self.hub.camera["native_motion_supported"] = True
+        self.hub.camera["native_motion_enabled"] = True
+        self.hub.camera["native_send2_available"] = True
+        self.hub.camera["native_send2_motion_sensitivity"] = 4
+        self.hub.camera["native_send2_motion_cooldown"] = 12
+        response = self.client.get("/camera/cam1/settings")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Long-Term Camera Settings", body)
+        self.assertIn("Anti-flicker mode", body)
+        self.assertIn("Horizontal flip", body)
+        self.assertIn("Brightness", body)
+        self.assertIn("Contrast", body)
+        self.assertIn("Saturation", body)
+        self.assertIn("Sharpness", body)
+        self.assertNotIn("Motion sensitivity for notifications", body)
+        self.assertIn("Day/Night", body)
+        self.assertIn("Automatic switching enabled", body)
+        self.assertIn("Switch to night mode above", body)
+        self.assertIn("Switch to day mode below", body)
+        self.assertIn("Change color mode", body)
+        self.assertIn("Flip IR cut filter", body)
+        self.assertIn("Use time-based schedule", body)
+        self.assertIn("Privacy Screen Overlays", body)
+        self.assertIn("Overlay text", body)
+        self.assertIn("Fill color", body)
+        self.assertIn("Stroke color", body)
+        self.assertIn('name="stream0_osd_privacy_text"', body)
+        self.assertIn('name="stream1_osd_privacy_text"', body)
+        self.assertIn("Stream Parameters", body)
+        self.assertIn("stream0_width", body)
+
+    def test_camera_send2_page_renders_services_and_output(self) -> None:
+        self.hub.controls["native_send2_available"] = True
+        self.hub.controls["native_send2_services"] = [
+            {
+                "name": "telegram",
+                "label": "Telegram",
+                "photo_supported": True,
+                "video_supported": False,
+                "motion_enabled": True,
+                "photo_enabled": True,
+                "video_enabled": False,
+            }
+        ]
+
+        response = self.client.get("/camera/cam1/send2")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Send to Services", body)
+        self.assertIn("Motion Detection", body)
+        self.assertIn("Start motion detection on boot", body)
+        self.assertIn("Sensitivity", body)
+        self.assertIn("Cooldown", body)
+        self.assertIn("Available Services", body)
+        self.assertIn("Finish Camera Setup", body)
+        self.assertIn('name="redirect_page" value="send2"', body)
+        self.assertNotIn('action="/pair/cam1"', body)
+        self.assertIn("Send2 Test Output", body)
+        self.assertIn("Save Motion &amp; Send2 Settings", body)
+        self.assertIn('href="/camera/cam1/settings"', body)
+        self.assertIn('href="/camera/cam1/send2"', body)
+        self.assertIn("Telegram", body)
+        self.assertNotIn('name="send2telegram_video"', body)
+        self.assertNotIn("Test video", body)
+
+    def test_camera_history_page_renders_pairing_card(self) -> None:
+        response = self.client.get("/camera/cam1/history")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Finish Camera Setup", body)
+        self.assertIn('name="redirect_page" value="history"', body)
+        self.assertIn('action="/connect/cam1"', body)
+        self.assertNotIn('action="/pair/cam1"', body)
+
+    def test_camera_history_page_shows_pair_step_only_after_hub_connection_exists(self) -> None:
+        self.hub.camera["hub_connected"] = True
+        self.hub.camera["registered_on_hub"] = True
+        self.hub.camera["api_token"] = ""
+        self.hub.camera["is_paired"] = False
+        self.hub.camera["api_status"] = "offline"
+
+        response = self.client.get("/camera/cam1/history")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Finish Camera Setup", body)
+        self.assertIn("Step 2 of 2", body)
+        self.assertNotIn('action="/connect/cam1"', body)
+        self.assertIn('action="/pair/cam1"', body)
+        self.assertIn("Install Pairing Bundle", body)
+
+    def test_camera_pages_hide_setup_actions_for_legacy_registration_false_positive(self) -> None:
+        self.hub.camera["present_on_mqtt_broker"] = True
+        self.hub.camera["has_agent"] = False
+        self.hub.camera["mqtt_command_status"] = "offline"
+        self.hub.camera["mqtt_command_capable"] = False
+        self.hub.camera["mqtt_command_last_error"] = "Camera did not respond to hub MQTT commands."
+
+        response = self.client.get("/camera/cam1")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Automatic setup is unavailable for this camera.", body)
+        self.assertNotIn("Finish Camera Setup", body)
+        self.assertNotIn("Step 1 of 2", body)
+        self.assertNotIn('action="/connect/cam1"', body)
+        self.assertNotIn('action="/pair/cam1"', body)
+        self.assertNotIn('data-async-action="/pair/cam1"', body)
+
+    def test_camera_history_page_hides_pair_step_for_legacy_registration_false_positive(self) -> None:
+        self.hub.camera["hub_connected"] = True
+        self.hub.camera["registered_on_hub"] = True
+        self.hub.camera["api_token"] = ""
+        self.hub.camera["is_paired"] = False
+        self.hub.camera["api_status"] = "offline"
+        self.hub.camera["has_agent"] = False
+        self.hub.camera["mqtt_command_status"] = "offline"
+        self.hub.camera["mqtt_command_capable"] = False
+        self.hub.camera["mqtt_command_last_error"] = "Camera did not respond to hub MQTT commands."
+
+        response = self.client.get("/camera/cam1/history")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Automatic setup is unavailable for this camera.", body)
+        self.assertNotIn("Finish Camera Setup", body)
+        self.assertNotIn("Step 2 of 2", body)
+        self.assertNotIn('action="/pair/cam1"', body)
+
+    def test_camera_detail_shows_pair_quick_action_only_after_connection_step(self) -> None:
+        response = self.client.get("/camera/cam1")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertNotIn('data-async-action="/pair/cam1"', body)
+
+        self.hub.camera["hub_connected"] = True
+        self.hub.camera["registered_on_hub"] = True
+        self.hub.camera["api_token"] = ""
+        self.hub.camera["is_paired"] = False
+        self.hub.camera["api_status"] = "offline"
+
+        response = self.client.get("/camera/cam1")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn('data-async-action="/pair/cam1"', body)
+
+    def test_camera_history_page_hides_pairing_card_when_camera_is_paired(self) -> None:
+        self.hub.camera["hub_connected"] = True
+        self.hub.camera["registered_on_hub"] = True
+        self.hub.camera["api_token"] = "paired-token"
+        self.hub.camera["is_paired"] = True
+        self.hub.camera["api_status"] = "online"
+
+        response = self.client.get("/camera/cam1/history")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertNotIn("Complete Pairing", body)
+        self.assertNotIn('action="/connect/cam1"', body)
+        self.assertNotIn('action="/pair/cam1"', body)
+
+    def test_camera_send2_page_disables_controls_when_api_is_offline(self) -> None:
+        self.hub.camera["api_status"] = "offline"
+        self.hub.controls["native_controls_available"] = False
+        self.hub.controls["native_controls_error"] = "GET /config failed: connection refused"
+        self.hub.controls["native_send2_available"] = True
+        self.hub.controls["native_send2_services"] = [
+            {
+                "name": "telegram",
+                "label": "Telegram",
+                "photo_supported": True,
+                "video_supported": True,
+                "motion_enabled": True,
+                "photo_enabled": True,
+                "video_enabled": True,
+            }
+        ]
+
+        response = self.client.get("/camera/cam1/send2")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Send2 settings are unavailable while the camera's Native API is offline.", body)
+        self.assertIn("<fieldset disabled>", body)
+        self.assertIn("Save Motion &amp; Send2 Settings", body)
+
+    def test_camera_send2_page_ignores_stale_api_probe_when_live_controls_are_available(self) -> None:
+        self.hub.camera["hub_connected"] = True
+        self.hub.camera["registered_on_hub"] = True
+        self.hub.camera["api_token"] = "paired-token"
+        self.hub.camera["is_paired"] = True
+        self.hub.camera["api_status"] = "offline"
+        self.hub.camera["api_last_error"] = "IncompleteRead(589736 bytes read, 42117 more expected)"
+        self.hub.controls["native_controls_available"] = True
+        self.hub.controls["native_controls_error"] = ""
+        self.hub.controls["native_send2_available"] = True
+        self.hub.controls["native_send2_services"] = [
+            {
+                "name": "telegram",
+                "label": "Telegram",
+                "photo_supported": True,
+                "video_supported": True,
+                "motion_enabled": True,
+                "photo_enabled": True,
+                "video_enabled": True,
+            }
+        ]
+
+        response = self.client.get("/camera/cam1/send2")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertNotIn("Send2 settings are unavailable while the camera's Native API is offline.", body)
+        self.assertNotIn("<fieldset disabled>", body)
+        self.assertIn("Save Motion &amp; Send2 Settings", body)
+
+    def test_camera_detail_renders_send_and_motion_shortcuts_when_camera_is_paired(self) -> None:
+        self.hub.camera["hub_connected"] = True
+        self.hub.camera["registered_on_hub"] = True
+        self.hub.camera["api_token"] = "paired-token"
+        self.hub.camera["is_paired"] = True
+        self.hub.controls["native_motion_supported"] = True
+        self.hub.controls["native_motion_enabled"] = True
+        self.hub.controls["native_record_supported"] = True
+        self.hub.controls["native_send2_available"] = True
+        self.hub.controls["native_send2_services"] = [
+            {
+                "name": "telegram",
+                "label": "Telegram",
+                "photo_supported": True,
+                "video_supported": False,
+                "motion_enabled": True,
+                "photo_enabled": True,
+                "video_enabled": False,
+                "photo_test_supported": True,
+                "video_test_supported": False,
+                "default_test_supported": False,
+            }
+        ]
+
+        response = self.client.get("/camera/cam1")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn('id="camera-control-bar"', body)
+        self.assertIn('data-cb-motion-toggle', body)
+        self.assertIn('href="/camera/cam1/send2#motion-detection-settings"', body)
+        self.assertIn('href="#clip-recording"', body)
+        self.assertIn('href="#timelapse-sources"', body)
+        self.assertIn('href="/camera/cam1/settings#daynight-settings"', body)
+        self.assertIn('href="/camera/cam1/settings#stream-audio-settings"', body)
+        self.assertIn('id="cb-audio-btn"', body)
+        self.assertIn('data-audio-stream-target="stream0"', body)
+        self.assertIn('href="/camera/cam1/send2"', body)
+        self.assertIn('data-send2-test-action="/send2-test/cam1/telegram"', body)
+        self.assertIn('data-send2-service-label="Telegram photo"', body)
+        self.assertIn('title="Run the default Send2 action"', body)
+
+    def test_apply_supported_config_returns_stream_audio_delta(self) -> None:
+        response = self.client.post(
+            "/apply-supported-config/cam1",
+            data={
+                "stream0_audio_enabled_present": "1",
+            },
+            headers=self.json_headers,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["message"], "Settings applied: native config: accepted")
+        self.assertIn("native_stream_controls", payload["camera"])
+        self.assertEqual(payload["camera"]["native_stream_controls"], [{"name": "stream0", "audio_enabled": False}])
+        self.assertFalse(self.hub.controls["native_stream_controls"][0]["audio_enabled"])
+
+    def test_apply_supported_config_returns_daynight_threshold_and_schedule_delta(self) -> None:
+        response = self.client.post(
+            "/apply-supported-config/cam1",
+            data={
+                "daynight_enabled_present": "1",
+                "daynight_enabled": "on",
+                "daynight_force_mode": "",
+                "daynight_total_gain_night_threshold": "2800",
+                "daynight_total_gain_day_threshold": "250",
+                "daynight_controls_color_present": "1",
+                "daynight_controls_color": "on",
+                "daynight_controls_ircut_present": "1",
+                "daynight_controls_ir850_present": "1",
+                "daynight_controls_ir940_present": "1",
+                "daynight_controls_ir940": "on",
+                "daynight_controls_white_present": "1",
+                "daynight_schedule_enabled_present": "1",
+                "daynight_schedule_enabled": "on",
+                "daynight_schedule_start_at": "19:00",
+                "daynight_schedule_stop_at": "06:30",
+            },
+            headers=self.json_headers,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["camera"]["native_daynight_total_gain_night_threshold"], "2800")
+        self.assertEqual(payload["camera"]["native_daynight_total_gain_day_threshold"], "250")
+        self.assertTrue(payload["camera"]["native_daynight_controls_color"])
+        self.assertFalse(payload["camera"]["native_daynight_controls_ircut"])
+        self.assertTrue(payload["camera"]["native_daynight_controls_ir940"])
+        self.assertTrue(payload["camera"]["native_daynight_schedule_enabled"])
+        self.assertEqual(payload["camera"]["native_daynight_schedule_start_at"], "19:00")
+        self.assertEqual(payload["camera"]["native_daynight_schedule_stop_at"], "06:30")
+
+    def test_apply_supported_config_returns_privacy_overlay_delta(self) -> None:
+        response = self.client.post(
+            "/apply-supported-config/cam1",
+            data={
+                "stream0_osd_privacy_enabled_present": "1",
+                "stream0_osd_privacy_enabled": "on",
+                "stream0_osd_privacy_text": "PRIVATE MODE",
+                "stream0_osd_privacy_fill_color": "#112233",
+                "stream0_osd_privacy_fill_alpha": "128",
+                "stream0_osd_privacy_stroke_color": "#AABBCC",
+                "stream0_osd_privacy_stroke_alpha": "64",
+            },
+            headers=self.json_headers,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["message"], "Settings applied: native config: accepted")
+        self.assertIn("native_stream_controls", payload["camera"])
+        self.assertEqual(
+            payload["camera"]["native_stream_controls"],
+            [
+                {
+                    "name": "stream0",
+                    "osd_privacy_enabled": True,
+                    "osd_privacy_text": "PRIVATE MODE",
+                    "osd_privacy_fill_color_value": "#112233",
+                    "osd_privacy_fill_alpha": "128",
+                    "osd_privacy_stroke_color_value": "#AABBCC",
+                    "osd_privacy_stroke_alpha": "64",
+                }
+            ],
+        )
+        self.assertEqual(
+            self.hub.last_patch_payload["stream0"]["osd"]["privacy"],
+            {
+                "enabled": True,
+                "text": "PRIVATE MODE",
+                "fill_color": "#11223380",
+                "stroke_color": "#AABBCC40",
+            },
+        )
+
+    def test_camera_detail_removes_send2_sections(self) -> None:
+        self.hub.camera["hub_connected"] = True
+        self.hub.camera["registered_on_hub"] = True
+        self.hub.camera["api_token"] = "paired-token"
+        self.hub.camera["is_paired"] = True
+        self.hub.controls["native_send2_available"] = True
+        self.hub.controls["native_send2_services"] = [
+            {
+                "name": "telegram",
+                "label": "Telegram",
+                "photo_supported": True,
+                "video_supported": True,
+                "motion_enabled": True,
+                "photo_enabled": True,
+                "video_enabled": True,
+                "photo_test_supported": True,
+                "video_test_supported": True,
+                "default_test_supported": False,
+            }
+        ]
+
+        response = self.client.get("/camera/cam1")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertNotIn("Send2 Services", body)
+        self.assertNotIn("Send2 Test Output", body)
+        self.assertIn("<i class=\"bi bi-send\"></i> Send", body)
+        self.assertIn('data-send2-test-action="/send2-test/cam1/telegram"', body)
+        self.assertIn("Send2 services and on-demand send tests live on the Send2 page.", body)
+
+    def test_camera_detail_removes_long_term_imaging_and_motion_fields(self) -> None:
+        response = self.client.get("/camera/cam1")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertNotIn('for="image_brightness"', body)
+        self.assertNotIn('for="image_contrast"', body)
+        self.assertNotIn('for="image_saturation"', body)
+        self.assertNotIn('for="image_sharpness"', body)
+        self.assertNotIn('for="motion_enabled"', body)
+        self.assertNotIn('for="send2_motion_sensitivity"', body)
+        self.assertNotIn('for="send2_motion_cooldown"', body)
+        self.assertNotIn("Supported Camera Controls", body)
+        self.assertNotIn("Apply Supported Settings", body)
+        self.assertNotIn("Back to Roster", body)
+        self.assertIn("Persistent imaging, motion, and stream settings moved to the Settings page.", body)
+
+    def test_camera_settings_post_redirects_back_to_settings(self) -> None:
+        response = self.client.post(
+            "/apply-supported-config/cam1",
+            data={
+                "redirect_page": "settings",
+                "image_anti_flicker": "50hz",
+                "image_hflip_present": "1",
+                "image_hflip": "on",
+                "image_vflip_present": "1",
+                "stream0_enabled_present": "1",
+                "stream0_enabled": "on",
+                "stream0_width": "1280",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers["Location"], "/camera/cam1/settings")
+        self.assertIsInstance(self.hub.last_patch_payload, dict)
+        self.assertEqual(self.hub.last_patch_payload["image"]["anti_flicker"], "1")
+        self.assertTrue(self.hub.last_patch_payload["image"]["hflip"])
+        self.assertFalse(self.hub.last_patch_payload["image"]["vflip"])
+        self.assertEqual(self.hub.last_patch_payload["stream0"]["width"], 1280)
+
+    def test_camera_send2_post_redirects_back_to_send2(self) -> None:
+        response = self.client.post(
+            "/apply-supported-config/cam1",
+            data={
+                "redirect_page": "send2",
+                "motion_send2telegram_present": "1",
+                "motion_send2telegram": "on",
+                "send2telegram_photo_present": "1",
+                "send2telegram_photo": "on",
+                "send2telegram_video_present": "1",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers["Location"], "/camera/cam1/send2")
+        self.assertEqual(
+            self.hub.last_send2_payload,
+            {
+                "motion": {"send2telegram": True},
+                "telegram": {"send_photo": True, "send_video": False},
+            },
+        )
+
+    def test_camera_send2_post_returns_clear_error_when_api_is_offline(self) -> None:
+        self.hub.camera["api_status"] = "offline"
+
+        response = self.client.post(
+            "/apply-supported-config/cam1",
+            data={
+                "redirect_page": "send2",
+                "motion_send2telegram_present": "1",
+                "motion_send2telegram": "on",
+            },
+            headers=self.json_headers,
+        )
+
+        self.assertEqual(response.status_code, 500)
+        payload = response.get_json()
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["redirect_url"], "/camera/cam1/send2")
+        self.assertIn("Native API is offline for this camera.", payload["message"])
+
+    def test_camera_expert_config_redirects_without_expert_access(self) -> None:
+        response = self.client.get("/camera/cam1/expert-config", follow_redirects=True)
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Expert access is required for the Native API Config Patch page.", body)
+        self.assertIn("Long-Term Camera Settings", body)
+
+    def test_camera_expert_config_redirects_for_advanced_users(self) -> None:
+        self.hub.config["ui"]["competency_level"] = "advanced"
+
+        response = self.client.get("/camera/cam1/expert-config", follow_redirects=True)
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Expert access is required for the Native API Config Patch page.", body)
+
+    def test_camera_expert_config_renders_for_expert_users(self) -> None:
+        self.hub.config["ui"]["competency_level"] = "expert"
+
+        response = self.client.get("/camera/cam1/expert-config")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Expert Config", body)
+        self.assertIn('href="/camera/cam1/native-actions"', body)
+        self.assertIn('href="/camera/cam1/history"', body)
+        self.assertIn("Native API Config Patch", body)
+        self.assertIn("Expert-only tool", body)
+        self.assertIn("name=\"config_patch\"", body)
+
+    def test_patch_config_requires_expert_access(self) -> None:
+        response = self.client.post(
+            "/patch-config/cam1",
+            data={"config_patch": '{"image": {"brightness": 64}}'},
+            headers=self.json_headers,
+        )
+
+        self.assertEqual(response.status_code, 403)
+        payload = response.get_json()
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["redirect_url"], "/camera/cam1/settings")
+
+    def test_patch_config_redirects_back_to_expert_page(self) -> None:
+        self.hub.config["ui"]["competency_level"] = "expert"
+
+        response = self.client.post(
+            "/patch-config/cam1",
+            data={
+                "redirect_page": "expert",
+                "config_patch": '{"image": {"brightness": 64}}',
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers["Location"], "/camera/cam1/expert-config")
+        self.assertEqual(self.hub.last_patch_payload, {"image": {"brightness": 64}})
+
+    def test_config_page_renders_user_competency_selector(self) -> None:
+        response = self.client.get("/config")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("User competency", body)
+        self.assertIn('name="ui_competency_level"', body)
+
+    def test_config_page_saves_user_competency_level(self) -> None:
+        response = self.client.post(
+            "/config",
+            data={
+                "telegram_token": "123456:token",
+                "telegram_api_url": "https://api.telegram.org",
+                "telegram_polling_timeout": "30",
+                "telegram_allowed_chat_ids": "",
+                "telegram_allowed_usernames": "",
+                "mqtt_host": "mqtt.local",
+                "mqtt_port": "1883",
+                "mqtt_username": "",
+                "mqtt_password": "",
+                "mqtt_keepalive": "60",
+                "routing_command_topic": "thingino/cam/{camera_id}/cmd",
+                "routing_reply_topic": "thingino/cam/+/reply",
+                "routing_registration_topic": "thingino/cam/+/hello",
+                "ui_username": "",
+                "ui_password": "",
+                "ui_competency_level": "expert",
+                "ui_registration_stale_after_seconds": "0",
+                "ui_snapshot_heartbeat_interval_seconds": "60",
+                "ui_snapshot_heartbeat_timeout_seconds": "5",
+                "ui_snapshot_cache_stale_after_seconds": "3600",
+                "history_path": "",
+                "history_recent_actions_limit": "20",
+                "history_max_action_events_per_camera": "1000",
+                "history_max_state_samples_per_camera": "5000",
+                "cameras_yaml": "",
+                "action": "save",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers["Location"], "/config")
+        self.assertIsNotNone(self.hub.saved_config)
+        self.assertEqual(self.hub.saved_config["ui"]["competency_level"], "expert")
+
+    def test_camera_native_actions_page_renders_history(self) -> None:
+        self.hub.config["ui"]["competency_level"] = "advanced"
+        self.hub.camera["native_action_history"] = [
+            {
+                "at": "now",
+                "action": "snapshot",
+                "status": "success",
+                "source": "hub",
+                "detail": "queued",
+            }
+        ]
+
+        response = self.client.get("/camera/cam1/native-actions")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Recent Native Actions", body)
+        self.assertIn("snapshot", body)
+        self.assertIn("queued", body)
+
+    def test_camera_native_actions_redirects_without_advanced_access(self) -> None:
+        response = self.client.get("/camera/cam1/native-actions", follow_redirects=True)
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Advanced access is required for this camera maintenance page.", body)
+        self.assertIn("Long-Term Camera Settings", body)
 
     def test_pair_camera_returns_success_summary(self) -> None:
         response = self.client.post("/pair/cam1", headers=self.json_headers)
@@ -405,6 +1406,30 @@ class WebRouteTests(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertIn("Pairing installed for cam1", payload["message"])
         self.assertEqual(payload["redirect_url"], "/camera/cam1")
+
+    def test_pair_camera_rejects_false_positive_registration(self) -> None:
+        self.hub.camera["mqtt_command_status"] = "offline"
+        self.hub.camera["mqtt_command_capable"] = False
+        self.hub.camera["mqtt_command_last_error"] = "Camera did not respond to hub MQTT commands."
+
+        response = self.client.post("/pair/cam1", headers=self.json_headers)
+
+        self.assertEqual(response.status_code, 500)
+        payload = response.get_json()
+        self.assertFalse(payload["ok"])
+        self.assertIn("Camera did not respond to hub MQTT commands.", payload["message"])
+
+    def test_pair_camera_preserves_requested_subpage_redirect(self) -> None:
+        response = self.client.post(
+            "/pair/cam1",
+            data={"redirect_page": "history"},
+            headers=self.json_headers,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["redirect_url"], "/camera/cam1/history")
 
     def test_connect_camera_returns_success_summary(self) -> None:
         response = self.client.post(
@@ -418,6 +1443,57 @@ class WebRouteTests(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertIn("Connected cam1 to the hub.", payload["message"])
         self.assertEqual(payload["redirect_url"], "/camera/cam1")
+
+    def test_connect_camera_leaves_camera_in_pair_step(self) -> None:
+        self.hub.camera["api_status"] = "offline"
+        response = self.client.post(
+            "/connect/cam1",
+            data={"onvif_username": "thingino", "onvif_password": "thingino"},
+            headers=self.json_headers,
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        response = self.client.get("/camera/cam1")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Step 2 of 2", body)
+        self.assertIn("Install Pairing Bundle", body)
+        self.assertNotIn("Step 1 of 2", body)
+        self.assertNotIn("Connect to Hub", body)
+
+    def test_connect_camera_rejects_false_positive_registration(self) -> None:
+        self.hub.camera["mqtt_command_status"] = "offline"
+        self.hub.camera["mqtt_command_capable"] = False
+        self.hub.camera["mqtt_command_last_error"] = "Camera did not respond to hub MQTT commands."
+
+        response = self.client.post(
+            "/connect/cam1",
+            data={"onvif_username": "thingino", "onvif_password": "thingino"},
+            headers=self.json_headers,
+        )
+
+        self.assertEqual(response.status_code, 500)
+        payload = response.get_json()
+        self.assertFalse(payload["ok"])
+        self.assertIn("Camera did not respond to hub MQTT commands.", payload["message"])
+
+    def test_connect_camera_preserves_requested_subpage_redirect(self) -> None:
+        response = self.client.post(
+            "/connect/cam1",
+            data={
+                "redirect_page": "info",
+                "onvif_username": "thingino",
+                "onvif_password": "thingino",
+            },
+            headers=self.json_headers,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["redirect_url"], "/camera/cam1/info")
 
     def test_hydrate_payload_route_returns_delta_payload(self) -> None:
         response = self.client.get("/camera/cam1/hydrate-payload", headers=self.json_headers)

@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block content %}
+  {% set page_key = 'info' %}
+  {% set page_label = 'Info & ONVIF' %}
+  {% set page_meta = camera.camera_id ~ ((' / ' ~ camera.ip) if camera.ip else '') ~ ((' / ' ~ camera.status) if camera.status else '') %}
+  {% include '_camera_page_header.html' %}
+
+  <section class="row g-3 mb-4">
+    <article class="col-12 col-xl-8">
+      <div class="card h-100 shadow-sm">
+        <div class="card-body">
+          <h2 class="card-title h4">Camera Info</h2>
+          <dl class="mb-0 columns-3">
+            <dt>Camera ID</dt><dd>{{ camera.camera_id }}</dd>
+            <dt>Camera Image ID</dt><dd>{{ camera.camera_image_id or 'unknown' }}</dd>
+            <dt>Hostname</dt><dd>{{ camera.hostname }}</dd>
+            <dt>IP</dt><dd>{{ camera.ip or 'n/a' }}</dd>
+            <dt>Snapshot URL</dt><dd>{{ camera.snapshot_url or 'not configured' }}</dd>
+            <dt>Native API</dt><dd>{{ camera.api_base_url or 'not configured' }}</dd>
+            <dt>API Status</dt><dd>{{ camera.api_status or 'unknown' }}</dd>
+            <dt>API Device</dt><dd>{{ camera.api_device_name or 'unknown' }}</dd>
+            <dt>API Model</dt><dd>{{ camera.api_device_model or 'unknown' }}</dd>
+            <dt>API Streamer</dt><dd>{{ camera.api_streamer or 'unknown' }}</dd>
+            <dt>API Version</dt><dd>{{ camera.api_version or 'unknown' }}</dd>
+            <dt>Last API Refresh</dt><dd>{{ camera.api_last_ok_at or 'never' }}</dd>
+            <dt>API Error</dt><dd>{{ camera.api_last_error or 'none' }}</dd>
+            <dt>Last Registration</dt><dd>{{ camera.last_registration_at or 'unknown' }}</dd>
+            <dt>Last Probe</dt><dd>{{ camera.last_probe_at or 'never' }}</dd>
+            <dt>Last Snapshot OK</dt><dd>{{ camera.last_snapshot_ok_at or 'never' }}</dd>
+            <dt>Probe Error</dt><dd>{{ camera.last_probe_error or 'none' }}</dd>
+          </dl>
+        </div>
+      </div>
+    </article>
+    <article class="col-12 col-xl-4">
+      <div class="card h-100 shadow-sm">
+        <div class="card-body">
+          <h2 class="card-title h4">ONVIF</h2>
+          <dl class="mb-0 columns-1">
+            <dt>ONVIF Endpoint</dt><dd>{{ camera.onvif_endpoint or 'not configured' }}</dd>
+            <dt>Manufacturer</dt><dd>{{ camera.onvif_manufacturer or 'unknown' }}</dd>
+            <dt>Model</dt><dd>{{ camera.onvif_model or 'unknown' }}</dd>
+            <dt>Firmware</dt><dd>{{ camera.onvif_firmware_version or 'unknown' }}</dd>
+            <dt>Serial Number</dt><dd>{{ camera.onvif_serial_number or 'unknown' }}</dd>
+            <dt>Hardware ID</dt><dd>{{ camera.onvif_hardware_id or 'unknown' }}</dd>
+            <dt>Last ONVIF Refresh</dt><dd>{{ camera.onvif_last_ok_at or 'never' }}</dd>
+            <dt>ONVIF Error</dt><dd>{{ camera.onvif_last_error or 'none' }}</dd>
+          </dl>
+        </div>
+      </div>
+    </article>
+
+  {% if camera.ota_upgrade_command %}
+    <article class="col-12">
+      <div class="card shadow-sm">
+        <div class="card-body">
+          <h2 class="card-title h4">Firmware Rebuild and OTA Command</h2>
+          <p class="small text-body-secondary mb-2">Click the command to copy it to the clipboard.</p>
+          <div class="form-control font-monospace cb" data-copy-text="{{ camera.ota_upgrade_command }}">{{ camera.ota_upgrade_command }}</div>
+        </div>
+      </div>
+    </article>
+  {% endif %}
+
+</section>
+{% endblock %}

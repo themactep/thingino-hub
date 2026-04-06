@@ -11,6 +11,8 @@ from urllib.parse import urlsplit
 from typing import TYPE_CHECKING, Any
 
 import yaml
+
+from .config_model import load_config_dict
 from flask import Flask, Response, flash, jsonify, redirect, render_template, request, send_file, session, url_for
 from werkzeug.serving import make_server
 
@@ -49,11 +51,28 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
 
     auth_enabled = bool(ui_username and ui_password)
 
+    def current_ui_competency_level() -> str:
+        try:
+            config = hub.export_config()
+        except Exception:
+            return "basic"
+        ui_config = config.get("ui") if isinstance(config, dict) else {}
+        return _normalize_competency_level((ui_config or {}).get("competency_level"))
+
+    def current_user_has_advanced_access() -> bool:
+        return current_ui_competency_level() in {"advanced", "expert"}
+
+    def current_user_has_expert_access() -> bool:
+        return current_ui_competency_level() == "expert"
+
     @app.context_processor
     def inject_auth_state() -> dict[str, Any]:
         return {
             "auth_enabled": auth_enabled,
             "is_authenticated": bool(session.get("ui_authenticated")),
+            "ui_competency_level": current_ui_competency_level(),
+            "ui_has_advanced_access": current_user_has_advanced_access(),
+            "ui_has_expert_access": current_user_has_expert_access(),
         }
 
     def credentials_are_valid(username: str, password: str) -> bool:
@@ -80,8 +99,78 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
 
     def camera_detail_payload(camera_id: str) -> dict[str, Any]:
         camera = hub.get_camera_for_ui(camera_id)
-        camera.update(hub.get_camera_supported_controls_for_ui(camera_id))
+        controls = hub.get_camera_supported_controls_for_ui(camera_id)
+        camera.update(controls)
+        if controls.get("native_controls_available"):
+            camera["api_status"] = "online"
+            if camera.get("api_last_error") and camera.get("api_last_error") != "Native API is not available on this camera build.":
+                camera["api_last_error"] = ""
         return camera
+
+    def save_camera_overrides(camera_id: str) -> None:
+        override_fields = (
+            "name",
+            "ip",
+            "snapshot_url",
+            "api_key",
+            "api_base_url",
+            "api_token",
+            "onvif_endpoint",
+            "onvif_username",
+            "onvif_password",
+        )
+        hub.update_camera_override(
+            camera_id,
+            {field: request.form.get(field, "") for field in override_fields if field in request.form},
+        )
+
+    def camera_page_redirect(camera_id: str, default_endpoint: str = "camera_detail") -> str:
+        page = str(request.form.get("redirect_page") or request.args.get("redirect_page") or "").strip().lower()
+        if page == "info":
+            return url_for("camera_info", camera_id=camera_id)
+        if page == "settings":
+            return url_for("camera_settings", camera_id=camera_id)
+        if page == "send2":
+            return url_for("camera_send2", camera_id=camera_id)
+        if page == "overrides":
+            return url_for("camera_overrides", camera_id=camera_id)
+        if page == "native-actions":
+            return url_for("camera_native_actions", camera_id=camera_id)
+        if page == "history":
+            return url_for("camera_history", camera_id=camera_id)
+        if page == "expert":
+            return url_for("camera_expert_config", camera_id=camera_id)
+        return url_for(default_endpoint, camera_id=camera_id)
+
+    def expert_access_required(camera_id: str) -> Response:
+        message = "Expert access is required for the Native API Config Patch page."
+        redirect_url = url_for("camera_settings", camera_id=camera_id)
+        if wants_json_response():
+            response = jsonify({
+                "ok": False,
+                "message": message,
+                "category": "error",
+                "redirect_url": redirect_url,
+            })
+            response.status_code = 403
+            return response
+        flash(message, "error")
+        return redirect(redirect_url)
+
+    def advanced_access_required(camera_id: str) -> Response:
+        message = "Advanced access is required for this camera maintenance page."
+        redirect_url = url_for("camera_settings", camera_id=camera_id)
+        if wants_json_response():
+            response = jsonify({
+                "ok": False,
+                "message": message,
+                "category": "error",
+                "redirect_url": redirect_url,
+            })
+            response.status_code = 403
+            return response
+        flash(message, "error")
+        return redirect(redirect_url)
 
     def supported_controls_delta_payload(form: Any) -> dict[str, Any]:
         payload: dict[str, Any] = {}
@@ -116,6 +205,90 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
             payload["native_daynight_enabled"] = enabled
             payload["native_daynight_force_mode"] = force_mode
             payload["native_daynight_requested_mode"] = force_mode or "auto"
+            for field in ("total_gain_night_threshold", "total_gain_day_threshold"):
+                raw_value = form.get(f"daynight_{field}")
+                if raw_value is not None and str(raw_value).strip() != "":
+                    payload[f"native_daynight_{field}"] = str(raw_value).strip()
+            for field in ("color", "ircut", "ir850", "ir940", "white"):
+                present = str(form.get(f"daynight_controls_{field}_present") or "").strip() == "1"
+                if present:
+                    payload[f"native_daynight_controls_{field}"] = form.get(f"daynight_controls_{field}") == "on"
+            if str(form.get("daynight_schedule_enabled_present") or "").strip() == "1":
+                payload["native_daynight_schedule_enabled"] = form.get("daynight_schedule_enabled") == "on"
+            for field in ("start_at", "stop_at"):
+                raw_value = form.get(f"daynight_schedule_{field}")
+                if raw_value is not None:
+                    payload[f"native_daynight_schedule_{field}"] = str(raw_value or "").strip()
+
+        stream_field_pattern = re.compile(r"^(stream\d+)_(enabled|audio_enabled|width|height|fps|bitrate|format|mode|osd_enabled|osd_time_enabled|osd_usertext_enabled|osd_usertext_format)$")
+        stream_present_pattern = re.compile(r"^(stream\d+)_(enabled|audio_enabled|osd_enabled|osd_time_enabled|osd_usertext_enabled)_present$")
+        stream_updates: dict[str, dict[str, Any]] = {}
+        for key in form.keys():
+            form_key = str(key)
+            match = stream_present_pattern.match(form_key)
+            if match is not None:
+                stream_name, field_name = match.groups()
+                stream_update = stream_updates.setdefault(stream_name, {"name": stream_name})
+                stream_update[field_name] = form.get(f"{stream_name}_{field_name}") == "on"
+                continue
+
+            match = stream_field_pattern.match(form_key)
+            if match is None:
+                continue
+
+            stream_name, field_name = match.groups()
+            if field_name in {"enabled", "audio_enabled", "osd_enabled", "osd_time_enabled", "osd_usertext_enabled"}:
+                continue
+
+            stream_update = stream_updates.setdefault(stream_name, {"name": stream_name})
+            raw_value = form.get(form_key)
+            if field_name in {"width", "height", "fps", "bitrate"}:
+                if raw_value is None or str(raw_value).strip() == "":
+                    continue
+                stream_update[field_name] = str(raw_value).strip()
+            elif field_name == "osd_usertext_format":
+                stream_update[field_name] = str(raw_value or "")
+            else:
+                stream_update[field_name] = str(raw_value or "")
+
+        if stream_updates:
+            payload["native_stream_controls"] = list(stream_updates.values())
+
+        privacy_enabled_present_pattern = re.compile(r"^(stream\d+)_osd_privacy_enabled_present$")
+        privacy_text_pattern = re.compile(r"^(stream\d+)_osd_privacy_text$")
+        privacy_color_pattern = re.compile(r"^(stream\d+)_osd_privacy_(fill|stroke)_color$")
+        for key in form.keys():
+            form_key = str(key)
+            match = privacy_enabled_present_pattern.match(form_key)
+            if match is not None:
+                stream_name = match.group(1)
+                stream_update = stream_updates.setdefault(stream_name, {"name": stream_name})
+                stream_update["osd_privacy_enabled"] = form.get(f"{stream_name}_osd_privacy_enabled") == "on"
+                continue
+
+            match = privacy_text_pattern.match(form_key)
+            if match is not None:
+                stream_name = match.group(1)
+                stream_update = stream_updates.setdefault(stream_name, {"name": stream_name})
+                stream_update["osd_privacy_text"] = str(form.get(form_key) or "")
+                continue
+
+            match = privacy_color_pattern.match(form_key)
+            if match is None:
+                continue
+            stream_name, color_kind = match.groups()
+            stream_update = stream_updates.setdefault(stream_name, {"name": stream_name})
+            color_value = _normalize_hex_color(form.get(form_key), f"{stream_name}.osd.privacy.{color_kind}_color")
+            alpha_value = _color_alpha_value(
+                form.get(f"{stream_name}_osd_privacy_{color_kind}_alpha"),
+                f"{stream_name}.osd.privacy.{color_kind}_alpha",
+            )
+            if color_value is not None:
+                stream_update[f"osd_privacy_{color_kind}_color_value"] = color_value
+                stream_update[f"osd_privacy_{color_kind}_alpha"] = str(alpha_value)
+
+        if stream_updates:
+            payload["native_stream_controls"] = list(stream_updates.values())
 
         if form.get("send2_motion_sensitivity") is not None:
             payload["native_send2_motion_sensitivity"] = str(form.get("send2_motion_sensitivity") or "").strip()
@@ -177,10 +350,53 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
                 force_mode = str(daynight.get("force_mode") or "").strip()
                 payload["native_daynight_force_mode"] = force_mode
                 payload["native_daynight_requested_mode"] = force_mode or "auto"
+            for field in ("total_gain_night_threshold", "total_gain_day_threshold"):
+                if field in daynight and daynight.get(field) not in (None, ""):
+                    payload[f"native_daynight_{field}"] = str(daynight.get(field))
+            controls = daynight.get("controls") or {}
+            if isinstance(controls, dict):
+                for field in ("color", "ircut", "ir850", "ir940", "white"):
+                    if field in controls:
+                        payload[f"native_daynight_controls_{field}"] = bool(controls.get(field))
+            schedule = daynight.get("schedule") or {}
+            if isinstance(schedule, dict):
+                if "enabled" in schedule:
+                    payload["native_daynight_schedule_enabled"] = bool(schedule.get("enabled"))
+                if "start_at" in schedule:
+                    payload["native_daynight_schedule_start_at"] = str(schedule.get("start_at") or "")
+                if "stop_at" in schedule:
+                    payload["native_daynight_schedule_stop_at"] = str(schedule.get("stop_at") or "")
 
         privacy = config_payload.get("privacy") or {}
         if isinstance(privacy, dict) and "enabled" in privacy:
             payload["native_privacy_enabled"] = bool(privacy.get("enabled"))
+
+        stream_updates: dict[str, dict[str, Any]] = {}
+        for stream_name, stream_payload in config_payload.items():
+            if not str(stream_name).startswith("stream") or not isinstance(stream_payload, dict):
+                continue
+            stream_update = stream_updates.setdefault(str(stream_name), {"name": str(stream_name)})
+            osd_payload = stream_payload.get("osd") or {}
+            if not isinstance(osd_payload, dict):
+                continue
+            privacy_payload = osd_payload.get("privacy") or {}
+            if not isinstance(privacy_payload, dict):
+                continue
+            if "enabled" in privacy_payload:
+                stream_update["osd_privacy_enabled"] = bool(privacy_payload.get("enabled"))
+            if "text" in privacy_payload:
+                stream_update["osd_privacy_text"] = str(privacy_payload.get("text") or "")
+            if "fill_color" in privacy_payload:
+                fill_color_value, fill_alpha = _split_hex_color_alpha(privacy_payload.get("fill_color"))
+                stream_update["osd_privacy_fill_color_value"] = fill_color_value
+                stream_update["osd_privacy_fill_alpha"] = fill_alpha
+            if "stroke_color" in privacy_payload:
+                stroke_color_value, stroke_alpha = _split_hex_color_alpha(privacy_payload.get("stroke_color"))
+                stream_update["osd_privacy_stroke_color_value"] = stroke_color_value
+                stream_update["osd_privacy_stroke_alpha"] = stroke_alpha
+
+        if stream_updates:
+            payload["native_stream_controls"] = list(stream_updates.values())
 
         return payload
 
@@ -419,29 +635,51 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
     def camera_detail(camera_id: str) -> str | Response:
         if request.method == "POST":
             try:
-                override_fields = (
-                    "name",
-                    "ip",
-                    "snapshot_url",
-                    "api_key",
-                    "api_base_url",
-                    "api_token",
-                    "onvif_endpoint",
-                    "onvif_username",
-                    "onvif_password",
-                )
-                hub.update_camera_override(
-                    camera_id,
-                    {field: request.form.get(field, "") for field in override_fields if field in request.form},
-                )
+                save_camera_overrides(camera_id)
                 flash(f"Saved camera overrides for {camera_id}.", "success")
                 return redirect(url_for("camera_detail", camera_id=camera_id))
             except Exception as error:
                 flash(f"Failed to save camera overrides: {error}", "error")
 
-        camera = hub.get_camera_for_ui(camera_id)
-        camera.update(hub.get_camera_supported_controls_for_ui(camera_id))
-        return render_template("camera_detail.html", camera=camera)
+        return render_template("camera_detail.html", camera=camera_detail_payload(camera_id))
+
+    @app.get("/camera/<camera_id>/info")
+    def camera_info(camera_id: str) -> str:
+        return render_template("camera_info.html", camera=camera_detail_payload(camera_id))
+
+    @app.route("/camera/<camera_id>/overrides", methods=["GET", "POST"])
+    def camera_overrides(camera_id: str) -> str | Response:
+        if not current_user_has_advanced_access():
+            return advanced_access_required(camera_id)
+        if request.method == "POST":
+            try:
+                save_camera_overrides(camera_id)
+                flash(f"Saved camera overrides for {camera_id}.", "success")
+                return redirect(url_for("camera_overrides", camera_id=camera_id))
+            except Exception as error:
+                flash(f"Failed to save camera overrides: {error}", "error")
+
+        return render_template("camera_overrides.html", camera=camera_detail_payload(camera_id))
+
+    @app.get("/camera/<camera_id>/native-actions")
+    def camera_native_actions(camera_id: str) -> str:
+        if not current_user_has_advanced_access():
+            return advanced_access_required(camera_id)
+        return render_template("camera_native_actions.html", camera=camera_detail_payload(camera_id))
+
+    @app.get("/camera/<camera_id>/settings")
+    def camera_settings(camera_id: str) -> str:
+        return render_template("camera_settings.html", camera=camera_detail_payload(camera_id))
+
+    @app.get("/camera/<camera_id>/send2")
+    def camera_send2(camera_id: str) -> str:
+        return render_template("camera_send2.html", camera=camera_detail_payload(camera_id))
+
+    @app.get("/camera/<camera_id>/expert-config")
+    def camera_expert_config(camera_id: str) -> str | Response:
+        if not current_user_has_expert_access():
+            return expert_access_required(camera_id)
+        return render_template("camera_expert_config.html", camera=camera_detail_payload(camera_id))
 
     @app.post("/camera/<camera_id>/hydrate")
     def hydrate_camera_detail(camera_id: str) -> Response:
@@ -482,11 +720,31 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
     @app.get("/camera/<camera_id>/history")
     def camera_history(camera_id: str) -> str:
         limit = _optional_int_value(request.args.get("limit"), "history.limit")
-        camera = hub.get_camera_history_for_ui(
-            camera_id,
-            limit=min(limit if limit is not None else 100, 500),
-            kind_filter=str(request.args.get("kind") or "all").strip().lower(),
-            sample_type_filter=str(request.args.get("sample_type") or "all").strip(),
+        camera = merge_camera_payloads(
+            hub.get_camera_history_for_ui(
+                camera_id,
+                limit=min(limit if limit is not None else 100, 500),
+                kind_filter=str(request.args.get("kind") or "all").strip().lower(),
+                sample_type_filter=str(request.args.get("sample_type") or "all").strip(),
+            ),
+            camera_fields_payload(
+                camera_id,
+                "setup_status",
+                "hub_connected",
+                "present_on_mqtt_broker",
+                "has_agent",
+                "registered_on_hub",
+                "is_paired",
+                "api_status",
+                "mqtt_command_status",
+                "mqtt_command_capable",
+                "mqtt_command_last_error",
+                "web_ui_url",
+                "default_onvif_username",
+                "default_onvif_password",
+                "override_onvif_username",
+                "override_onvif_password",
+            ),
         )
         return render_template("camera_history.html", camera=camera)
 
@@ -573,6 +831,7 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
 
     @app.post("/connect/<camera_id>")
     def connect_camera(camera_id: str) -> Response:
+        redirect_url = camera_page_redirect(camera_id)
         try:
             camera = hub.get_camera_for_ui(camera_id)
             enrollment = {
@@ -588,14 +847,14 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
             return action_response(
                 message,
                 category,
-                url_for("camera_detail", camera_id=camera_id),
+                redirect_url,
                 camera_id=camera_id,
             )
         except Exception as error:
             return action_response(
                 f"Connect failed for {camera_id}: {error}",
                 "error",
-                url_for("camera_detail", camera_id=camera_id),
+                redirect_url,
                 camera_id=camera_id,
                 status_code=500,
             )
@@ -659,6 +918,7 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
 
     @app.post("/pair/<camera_id>")
     def pair_camera(camera_id: str) -> Response:
+        redirect_url = camera_page_redirect(camera_id)
         try:
             camera = hub.get_camera_for_ui(camera_id)
             enrollment = {
@@ -671,13 +931,13 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
                 return action_response(
                     f"Pairing install was published for {camera_id}, but the camera did not confirm before the timeout.",
                     "warning",
-                    url_for("camera_detail", camera_id=camera_id),
+                    redirect_url,
                     camera_id=camera_id,
                 )
             return action_response(
                 f"Pairing installed for {camera_id}; native API should come back after the agent restarts.",
                 "success",
-                url_for("camera_detail", camera_id=camera_id),
+                redirect_url,
                 camera_id=camera_id,
                 reload=True,
             )
@@ -685,7 +945,7 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
             return action_response(
                 f"Pairing failed for {camera_id}: {error}",
                 "error",
-                url_for("camera_detail", camera_id=camera_id),
+                redirect_url,
                 camera_id=camera_id,
                 status_code=500,
             )
@@ -839,12 +1099,15 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
 
     @app.post("/patch-config/<camera_id>")
     def patch_config(camera_id: str) -> Response:
+        if not current_user_has_expert_access():
+            return expert_access_required(camera_id)
         raw_payload = str(request.form.get("config_patch") or "").strip()
+        redirect_url = camera_page_redirect(camera_id)
         if not raw_payload:
             return action_response(
                 "Native config patch payload is empty.",
                 "error",
-                url_for("camera_detail", camera_id=camera_id),
+                redirect_url,
                 camera_id=camera_id,
                 status_code=400,
             )
@@ -855,7 +1118,7 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
             return action_response(
                 f"Invalid native config patch JSON: {error}",
                 "error",
-                url_for("camera_detail", camera_id=camera_id),
+                redirect_url,
                 camera_id=camera_id,
                 status_code=400,
             )
@@ -864,7 +1127,7 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
             return action_response(
                 "Native config patch must be a JSON object.",
                 "error",
-                url_for("camera_detail", camera_id=camera_id),
+                redirect_url,
                 camera_id=camera_id,
                 status_code=400,
             )
@@ -874,7 +1137,7 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
             return action_response(
                 "Config patch applied.",
                 "success",
-                url_for("camera_detail", camera_id=camera_id),
+                redirect_url,
                 camera_payload=merge_camera_payloads(
                     supported_controls_delta_from_payload(payload),
                     latest_action_history_delta_payload(camera_id),
@@ -884,13 +1147,14 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
             return action_response(
                 f"Config patch failed: {error}",
                 "error",
-                url_for("camera_detail", camera_id=camera_id),
+                redirect_url,
                 camera_payload={},
                 status_code=500,
             )
 
     @app.post("/apply-supported-config/<camera_id>")
     def apply_supported_config(camera_id: str) -> Response:
+        redirect_url = camera_page_redirect(camera_id)
         try:
             native_payload = merge_flip_state(camera_id, _supported_config_patch_from_form(request.form))
             send2_payload = _send2_motion_patch_from_form(request.form)
@@ -906,7 +1170,7 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
             return action_response(
                 f"Settings applied: {'; '.join(results)}",
                 "success",
-                url_for("camera_detail", camera_id=camera_id),
+                redirect_url,
                 camera_payload=merge_camera_payloads(
                     supported_controls_delta_payload(request.form),
                     latest_action_history_delta_payload(camera_id),
@@ -916,13 +1180,14 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
             return action_response(
                 f"Settings update failed: {error}",
                 "error",
-                url_for("camera_detail", camera_id=camera_id),
+                redirect_url,
                 camera_payload={},
                 status_code=500,
             )
 
     @app.post("/send2-test/<camera_id>/<service_name>")
     def send2_test(camera_id: str, service_name: str) -> Response:
+        redirect_url = camera_page_redirect(camera_id, default_endpoint="camera_send2")
         verbose_value = str(request.form.get("verbose") or request.args.get("verbose") or "1").strip().lower()
         verbose = verbose_value not in {"0", "false", "no", "off"}
         send_type = str(request.form.get("type") or request.args.get("type") or "").strip().lower()
@@ -936,12 +1201,12 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
                     "ok": True,
                     "message": f"Send2 test finished for {label}.",
                     "category": "success",
-                    "redirect_url": url_for("camera_detail", camera_id=camera_id),
+                    "redirect_url": redirect_url,
                     "send2_test": result,
                 }
                 return jsonify(payload)
             flash(f"Send2 test finished for {label}.", "success")
-            return redirect(url_for("camera_detail", camera_id=camera_id))
+            return redirect(redirect_url)
         except Exception as error:
             label = service_name
             if send_type:
@@ -951,13 +1216,13 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
                     "ok": False,
                     "message": f"Send2 test failed for {label}: {error}",
                     "category": "error",
-                    "redirect_url": url_for("camera_detail", camera_id=camera_id),
+                    "redirect_url": redirect_url,
                 }
                 response = jsonify(payload)
                 response.status_code = 500
                 return response
             flash(f"Send2 test failed for {label}: {error}", "error")
-            return redirect(url_for("camera_detail", camera_id=camera_id))
+            return redirect(redirect_url)
 
     @app.post("/privacy/<camera_id>")
     def set_privacy(camera_id: str) -> Response:
@@ -1199,6 +1464,13 @@ def _post_login_redirect_target(target: Any) -> str:
     return url_for("dashboard")
 
 
+def _normalize_competency_level(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"basic", "advanced", "expert"}:
+        return normalized
+    return "basic"
+
+
 def _native_anti_flicker_value(value: Any) -> str:
     mode = str(value or "").strip().lower()
     aliases = {
@@ -1251,10 +1523,32 @@ def _supported_config_patch_from_form(form: Any) -> dict[str, Any]:
         force_mode = str(form.get("daynight_force_mode") or "").strip()
         if force_mode:
             daynight["force_mode"] = force_mode
+        for field in ("total_gain_night_threshold", "total_gain_day_threshold"):
+            value = _optional_int_value(form.get(f"daynight_{field}"), f"daynight.{field}")
+            if value is not None:
+                daynight[field] = value
+        controls: dict[str, Any] = {}
+        for field in ("color", "ircut", "ir850", "ir940", "white"):
+            if str(form.get(f"daynight_controls_{field}_present") or "").strip() == "1":
+                controls[field] = form.get(f"daynight_controls_{field}") == "on"
+        if controls:
+            daynight["controls"] = controls
+        schedule: dict[str, Any] = {}
+        if str(form.get("daynight_schedule_enabled_present") or "").strip() == "1":
+            schedule["enabled"] = form.get("daynight_schedule_enabled") == "on"
+        for field in ("start_at", "stop_at"):
+            raw_value = str(form.get(f"daynight_schedule_{field}") or "").strip()
+            if raw_value:
+                schedule[field] = raw_value
+        if schedule:
+            daynight["schedule"] = schedule
         payload["daynight"] = daynight
 
     stream_field_pattern = re.compile(r"^(stream\d+)_(enabled|audio_enabled|width|height|fps|bitrate|format|mode|osd_enabled|osd_time_enabled|osd_usertext_enabled|osd_usertext_format)$")
     stream_present_pattern = re.compile(r"^(stream\d+)_(enabled|audio_enabled|osd_enabled|osd_time_enabled|osd_usertext_enabled)_present$")
+    privacy_enabled_present_pattern = re.compile(r"^(stream\d+)_osd_privacy_enabled_present$")
+    privacy_text_pattern = re.compile(r"^(stream\d+)_osd_privacy_text$")
+    privacy_color_pattern = re.compile(r"^(stream\d+)_osd_privacy_(fill|stroke)_color$")
     stream_payloads: dict[str, dict[str, Any]] = {}
     restart_thread_mask = 0
     for key in form.keys():
@@ -1283,6 +1577,17 @@ def _supported_config_patch_from_form(form: Any) -> dict[str, Any]:
             restart_thread_mask |= thread_rtsp | thread_video
 
     for key in form.keys():
+        match = privacy_enabled_present_pattern.match(str(key))
+        if match is None:
+            continue
+        stream_name = match.group(1)
+        stream_payload = stream_payloads.setdefault(stream_name, {})
+        osd_payload = stream_payload.setdefault("osd", {})
+        privacy_payload = osd_payload.setdefault("privacy", {})
+        privacy_payload["enabled"] = form.get(f"{stream_name}_osd_privacy_enabled") == "on"
+        restart_thread_mask |= thread_video | thread_osd
+
+    for key in form.keys():
         match = stream_field_pattern.match(str(key))
         if match is None:
             continue
@@ -1309,6 +1614,35 @@ def _supported_config_patch_from_form(form: Any) -> dict[str, Any]:
         if value:
             stream_payload[field_name] = value
             restart_thread_mask |= thread_rtsp | thread_video
+
+    for key in form.keys():
+        form_key = str(key)
+        match = privacy_text_pattern.match(form_key)
+        if match is not None:
+            stream_name = match.group(1)
+            stream_payload = stream_payloads.setdefault(stream_name, {})
+            osd_payload = stream_payload.setdefault("osd", {})
+            privacy_payload = osd_payload.setdefault("privacy", {})
+            privacy_payload["text"] = str(form.get(form_key) or "")
+            restart_thread_mask |= thread_video | thread_osd
+            continue
+
+        match = privacy_color_pattern.match(form_key)
+        if match is None:
+            continue
+        stream_name, color_kind = match.groups()
+        color_value = _normalize_hex_color(form.get(form_key), f"{stream_name}.osd.privacy.{color_kind}_color")
+        if color_value is None:
+            continue
+        alpha_value = _color_alpha_value(
+            form.get(f"{stream_name}_osd_privacy_{color_kind}_alpha"),
+            f"{stream_name}.osd.privacy.{color_kind}_alpha",
+        )
+        stream_payload = stream_payloads.setdefault(stream_name, {})
+        osd_payload = stream_payload.setdefault("osd", {})
+        privacy_payload = osd_payload.setdefault("privacy", {})
+        privacy_payload[f"{color_kind}_color"] = _combine_hex_color_and_alpha(color_value, alpha_value)
+        restart_thread_mask |= thread_video | thread_osd
 
     payload.update({stream_name: stream_payload for stream_name, stream_payload in stream_payloads.items() if stream_payload})
     if restart_thread_mask:
@@ -1367,6 +1701,41 @@ def _optional_int_value(raw_value: Any, field_name: str) -> int | None:
         raise ValueError(f"{field_name} must be an integer") from error
 
 
+def _normalize_hex_color(raw_value: Any, field_name: str) -> str | None:
+    value = str(raw_value or "").strip().upper()
+    if not value:
+        return None
+    if not re.fullmatch(r"#[0-9A-F]{6}", value):
+        raise ValueError(f"{field_name} must be a #RRGGBB color")
+    return value
+
+
+def _color_alpha_value(raw_value: Any, field_name: str) -> int:
+    value = str(raw_value or "").strip()
+    if not value:
+        return 255
+    try:
+        parsed = int(value)
+    except ValueError as error:
+        raise ValueError(f"{field_name} must be an integer") from error
+    if parsed < 0 or parsed > 255:
+        raise ValueError(f"{field_name} must be between 0 and 255")
+    return parsed
+
+
+def _combine_hex_color_and_alpha(color_value: str, alpha_value: int) -> str:
+    return f"{color_value}{alpha_value:02X}"
+
+
+def _split_hex_color_alpha(raw_value: Any) -> tuple[str, str]:
+    value = str(raw_value or "").strip().upper()
+    if re.fullmatch(r"#[0-9A-F]{8}", value):
+        return value[:7], str(int(value[7:], 16))
+    if re.fullmatch(r"#[0-9A-F]{6}", value):
+        return value, "255"
+    return "#000000", "255"
+
+
 def _config_from_form(form: Any, allow_partial: bool = False) -> dict[str, Any]:
     config = {
         "telegram": {
@@ -1392,6 +1761,7 @@ def _config_from_form(form: Any, allow_partial: bool = False) -> dict[str, Any]:
         "ui": {
             "username": form.get("ui_username", "").strip(),
             "password": form.get("ui_password", ""),
+            "competency_level": _normalize_competency_level(form.get("ui_competency_level")),
             "registration_stale_after_seconds": _int_value(form.get("ui_registration_stale_after_seconds"), 0),
             "snapshot_heartbeat_interval_seconds": _int_value(form.get("ui_snapshot_heartbeat_interval_seconds"), 60),
             "snapshot_heartbeat_timeout_seconds": _int_value(form.get("ui_snapshot_heartbeat_timeout_seconds"), 5),
@@ -1409,8 +1779,6 @@ def _config_from_form(form: Any, allow_partial: bool = False) -> dict[str, Any]:
 
     if allow_partial:
         return config
-
-    from .main import load_config_dict
 
     return load_config_dict(copy.deepcopy(config))
 

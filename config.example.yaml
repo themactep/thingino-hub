@@ -21,6 +21,7 @@ routing:
 ui:
   username: ""
   password: ""
+  competency_level: "basic"
   registration_stale_after_seconds: 0
   snapshot_heartbeat_interval_seconds: 60
   snapshot_heartbeat_timeout_seconds: 5

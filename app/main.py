@@ -7,6 +7,7 @@ import os
 import ipaddress
 import base64
 import hashlib
+import re
 import signal
 import secrets
 import ssl
@@ -28,6 +29,7 @@ import paho.mqtt.client as mqtt
 import yaml
 
 from .camera_api import CameraApiClient, CameraApiError
+from .config_model import load_config_dict as _load_config_dict
 from .history_store import HistoryStore
 from .web import WebServer, create_web_app
 
@@ -92,6 +94,9 @@ class Camera:
     api_device_model: str = ""
     api_streamer: str = ""
     api_version: str = ""
+    mqtt_command_status: str = "unknown"
+    mqtt_command_last_ok_at: int | None = None
+    mqtt_command_last_error: str = ""
 
 
 class TelegramApi:
@@ -181,6 +186,7 @@ class Hub:
         self.api_refreshing: set[str] = set()
         self.snapshot_refreshing: set[str] = set()
         self.supported_controls_refreshing: set[str] = set()
+        self.mqtt_command_refreshing: set[str] = set()
         self.event_streaming: set[str] = set()
         self.pending_by_request: dict[str, dict[str, Any]] = {}
         self.command_reply_timeout_seconds = 5.0
@@ -223,6 +229,26 @@ class Hub:
             return ""
         scheme = parsed.scheme or "http"
         return urllib.parse.urlunsplit((scheme, parsed.netloc, "/api/v1", "", ""))
+
+    def _camera_web_ui_url(self, camera: Camera) -> str:
+        snapshot_url = camera.snapshot_url.strip()
+        if snapshot_url:
+            parsed = urllib.parse.urlsplit(snapshot_url)
+            if parsed.netloc:
+                scheme = parsed.scheme or "http"
+                return urllib.parse.urlunsplit((scheme, parsed.netloc, "/", "", ""))
+
+        api_base_url = camera.api_base_url.strip()
+        if api_base_url:
+            parsed = urllib.parse.urlsplit(api_base_url)
+            if parsed.netloc:
+                scheme = parsed.scheme or "http"
+                return urllib.parse.urlunsplit((scheme, parsed.netloc, "/", "", ""))
+
+        if camera.ip:
+            return f"http://{camera.ip}/"
+
+        return ""
 
     def _camera_api_token(self, camera: Camera) -> str:
         return camera.api_token.strip()
@@ -333,6 +359,9 @@ class Hub:
                 api_device_model=str(entry.get("api_device_model") or "").strip(),
                 api_streamer=str(entry.get("api_streamer") or "").strip(),
                 api_version=str(entry.get("api_version") or "").strip(),
+                mqtt_command_status=str(entry.get("mqtt_command_status") or "unknown").strip() or "unknown",
+                mqtt_command_last_ok_at=self._coerce_int(entry.get("mqtt_command_last_ok_at")),
+                mqtt_command_last_error=str(entry.get("mqtt_command_last_error") or "").strip(),
             )
 
         static_camera_ids = {
@@ -375,6 +404,9 @@ class Hub:
             "api_device_model": camera.api_device_model,
             "api_streamer": camera.api_streamer,
             "api_version": camera.api_version,
+            "mqtt_command_status": camera.mqtt_command_status,
+            "mqtt_command_last_ok_at": camera.mqtt_command_last_ok_at,
+            "mqtt_command_last_error": camera.mqtt_command_last_error,
         }
 
     def _persist_state(self) -> None:
@@ -600,6 +632,7 @@ class Hub:
         self._schedule_api_refresh(camera_id)
         self._schedule_onvif_refresh(camera_id)
         self._schedule_supported_controls_refresh(camera_id)
+        self._schedule_mqtt_command_refresh(camera_id)
         self._schedule_event_stream(camera_id)
 
     def _camera_with_runtime_state(self, camera: Camera, existing: Camera | None) -> Camera:
@@ -626,6 +659,9 @@ class Hub:
             api_device_model=existing.api_device_model,
             api_streamer=existing.api_streamer,
             api_version=existing.api_version,
+            mqtt_command_status=existing.mqtt_command_status,
+            mqtt_command_last_ok_at=existing.mqtt_command_last_ok_at,
+            mqtt_command_last_error=existing.mqtt_command_last_error,
         )
 
     def _schedule_api_refresh_for_all(self) -> None:
@@ -639,6 +675,37 @@ class Hub:
             camera_ids = list(self.cameras)
         for camera_id in camera_ids:
             self._schedule_supported_controls_refresh(camera_id)
+
+    def _schedule_mqtt_command_refresh_for_all(self) -> None:
+        with self.state_lock:
+            camera_ids = list(self.cameras)
+        for camera_id in camera_ids:
+            self._schedule_mqtt_command_refresh(camera_id)
+
+    def _schedule_mqtt_command_refresh(self, camera_id: str) -> bool:
+        resolved = self._resolve_camera_id(camera_id) or camera_id.strip().lower()
+        with self.state_lock:
+            camera = self.cameras.get(resolved)
+            if camera is None:
+                return False
+            if resolved in self.mqtt_command_refreshing:
+                return False
+            self.mqtt_command_refreshing.add(resolved)
+        worker = threading.Thread(
+            target=self._refresh_mqtt_command_worker,
+            args=(resolved,),
+            name=f"telegrambothub-mqtt-{resolved[:8]}",
+            daemon=True,
+        )
+        worker.start()
+        return True
+
+    def _refresh_mqtt_command_worker(self, camera_id: str) -> None:
+        try:
+            self.refresh_camera_mqtt_command_status(camera_id)
+        finally:
+            with self.state_lock:
+                self.mqtt_command_refreshing.discard(camera_id)
 
     def _schedule_event_stream_for_all(self) -> None:
         with self.state_lock:
@@ -859,12 +926,47 @@ class Hub:
             cached = self.supported_controls_cache_by_camera.get(resolved)
         if camera is None:
             raise RuntimeError(f"Unknown camera: {camera_id}")
+        needs_live_refresh = False
         if cached is None:
+            needs_live_refresh = camera.api_status == "online"
+        elif camera.api_status == "online":
+            needs_live_refresh = not bool(cached.get("native_controls_available")) or bool(cached.get("native_controls_error"))
+
+        if needs_live_refresh:
+            try:
+                controls = self.refresh_camera_supported_controls_for_ui(resolved)
+            except Exception:
+                LOG.debug("Supported controls refresh failed for %s while API looked online", resolved, exc_info=True)
+                controls = dict(cached) if cached is not None else self._default_camera_supported_controls_for_ui(camera)
+                self._schedule_supported_controls_refresh(resolved)
+        elif cached is None:
             self._schedule_supported_controls_refresh(resolved)
             controls = self._default_camera_supported_controls_for_ui(camera)
         else:
             controls = dict(cached)
-        controls.update(self._optimistic_supported_controls_overlay(resolved))
+        optimistic_overlay = self._optimistic_supported_controls_overlay(resolved)
+        optimistic_stream_updates = optimistic_overlay.pop("native_stream_controls_updates", None)
+        controls.update(optimistic_overlay)
+        if isinstance(optimistic_stream_updates, list) and optimistic_stream_updates:
+            merged_streams = [dict(stream) for stream in (controls.get("native_stream_controls") or []) if isinstance(stream, dict)]
+            stream_indexes = {
+                str(stream.get("name") or ""): index
+                for index, stream in enumerate(merged_streams)
+                if str(stream.get("name") or "")
+            }
+            for stream_update in optimistic_stream_updates:
+                if not isinstance(stream_update, dict):
+                    continue
+                stream_name = str(stream_update.get("name") or "")
+                if not stream_name:
+                    continue
+                update_values = dict(stream_update)
+                if stream_name in stream_indexes:
+                    merged_streams[stream_indexes[stream_name]].update(update_values)
+                else:
+                    stream_indexes[stream_name] = len(merged_streams)
+                    merged_streams.append(update_values)
+            controls["native_stream_controls"] = merged_streams
         return controls
 
     def _refresh_api_worker(self, camera_id: str) -> None:
@@ -1000,10 +1102,75 @@ class Hub:
                 values["native_daynight_requested_mode"] = force_mode or "auto"
             if "target_mode" in daynight:
                 values["native_daynight_requested_mode"] = str(daynight.get("target_mode") or "auto").strip() or "auto"
+            for field in ("total_gain_night_threshold", "total_gain_day_threshold"):
+                if field in daynight and daynight.get(field) not in (None, ""):
+                    values[f"native_daynight_{field}"] = str(daynight.get(field))
+            controls = daynight.get("controls") or {}
+            if isinstance(controls, dict):
+                for field in ("color", "ircut", "ir850", "ir940", "white"):
+                    if field in controls:
+                        values[f"native_daynight_controls_{field}"] = bool(self._coerce_bool(controls.get(field)))
+            schedule = daynight.get("schedule") or {}
+            if isinstance(schedule, dict):
+                if "enabled" in schedule:
+                    values["native_daynight_schedule_enabled"] = bool(self._coerce_bool(schedule.get("enabled")))
+                if "start_at" in schedule:
+                    values["native_daynight_schedule_start_at"] = str(schedule.get("start_at") or "")
+                if "stop_at" in schedule:
+                    values["native_daynight_schedule_stop_at"] = str(schedule.get("stop_at") or "")
 
         privacy = payload.get("privacy") or {}
         if isinstance(privacy, dict) and "enabled" in privacy:
             values["native_privacy_enabled"] = bool(self._coerce_bool(privacy.get("enabled")))
+
+        stream_updates: list[dict[str, Any]] = []
+        for stream_name, stream_payload in payload.items():
+            if not str(stream_name).startswith("stream") or not isinstance(stream_payload, dict):
+                continue
+            stream_update: dict[str, Any] = {"name": str(stream_name)}
+            for field_name in ("enabled", "audio_enabled", "width", "height", "fps", "bitrate", "format", "mode"):
+                if field_name in stream_payload:
+                    field_value = stream_payload.get(field_name)
+                    if field_name in {"enabled", "audio_enabled"}:
+                        stream_update[field_name] = bool(self._coerce_bool(field_value))
+                    else:
+                        stream_update[field_name] = "" if field_value in (None, "") else str(field_value)
+
+            osd_payload = stream_payload.get("osd") or {}
+            if isinstance(osd_payload, dict):
+                if "enabled" in osd_payload:
+                    stream_update["osd_enabled"] = bool(self._coerce_bool(osd_payload.get("enabled")))
+                time_payload = osd_payload.get("time") or {}
+                if isinstance(time_payload, dict) and "enabled" in time_payload:
+                    stream_update["osd_time_enabled"] = bool(self._coerce_bool(time_payload.get("enabled")))
+                usertext_payload = osd_payload.get("usertext") or {}
+                if isinstance(usertext_payload, dict):
+                    if "enabled" in usertext_payload:
+                        stream_update["osd_usertext_enabled"] = bool(self._coerce_bool(usertext_payload.get("enabled")))
+                    if "format" in usertext_payload:
+                        stream_update["osd_usertext_format"] = str(usertext_payload.get("format") or "")
+                privacy_payload = osd_payload.get("privacy") or {}
+                if isinstance(privacy_payload, dict):
+                    if "enabled" in privacy_payload:
+                        stream_update["osd_privacy_enabled"] = bool(self._coerce_bool(privacy_payload.get("enabled")))
+                    if "text" in privacy_payload:
+                        stream_update["osd_privacy_text"] = str(privacy_payload.get("text") or "")
+                    if "fill_color" in privacy_payload:
+                        fill_color_value, fill_alpha = self._split_hex_color_alpha(privacy_payload.get("fill_color"))
+                        stream_update["osd_privacy_fill_color"] = str(privacy_payload.get("fill_color") or "")
+                        stream_update["osd_privacy_fill_color_value"] = fill_color_value
+                        stream_update["osd_privacy_fill_alpha"] = fill_alpha
+                    if "stroke_color" in privacy_payload:
+                        stroke_color_value, stroke_alpha = self._split_hex_color_alpha(privacy_payload.get("stroke_color"))
+                        stream_update["osd_privacy_stroke_color"] = str(privacy_payload.get("stroke_color") or "")
+                        stream_update["osd_privacy_stroke_color_value"] = stroke_color_value
+                        stream_update["osd_privacy_stroke_alpha"] = stroke_alpha
+
+            if len(stream_update) > 1:
+                stream_updates.append(stream_update)
+
+        if stream_updates:
+            values["native_stream_controls_updates"] = stream_updates
 
         if not values:
             return
@@ -1116,10 +1283,17 @@ class Hub:
             camera = self.cameras.get(resolved)
         if camera is None:
             raise RuntimeError(f"Unknown camera: {camera_id}")
+        if not self._camera_api_base_url(camera):
+            raise RuntimeError("Native API is not configured for this camera.")
+        if str(camera.api_status or "").strip().lower() == "offline":
+            raise RuntimeError("Native API is offline for this camera.")
+        if str(camera.api_status or "").strip().lower() == "unsupported":
+            raise RuntimeError("Native API is not available on this camera build.")
 
         try:
             client = self._camera_api_client(camera)
             results: list[str] = []
+            send2_capabilities = client.get_capabilities().get("send2") or {}
 
             motion = payload.get("motion") or {}
             if "sensitivity" in motion:
@@ -1135,10 +1309,13 @@ class Hub:
                     results.append(f"motion.{motion_key}")
                 service_data = payload.get(service_name)
                 if isinstance(service_data, dict):
-                    if "send_photo" in service_data:
+                    service_cap = send2_capabilities.get(service_name) or {}
+                    photo_supported = bool(service_cap.get("send_photo")) if isinstance(service_cap, dict) else False
+                    video_supported = bool(service_cap.get("send_video")) if isinstance(service_cap, dict) else False
+                    if "send_photo" in service_data and photo_supported:
                         client.patch_setting(f"send2/services/{service_name}/send-photo", {"send_photo": bool(service_data["send_photo"])})
                         results.append(f"{service_name}.send_photo")
-                    if "send_video" in service_data:
+                    if "send_video" in service_data and video_supported:
                         client.patch_setting(f"send2/services/{service_name}/send-video", {"send_video": bool(service_data["send_video"])})
                         results.append(f"{service_name}.send_video")
         except Exception as error:
@@ -2070,6 +2247,16 @@ class Hub:
             "native_daynight_modes": ["auto", "day", "night"],
             "native_daynight_requested_mode": "auto",
             "native_daynight_running_mode": "",
+            "native_daynight_total_gain_night_threshold": "",
+            "native_daynight_total_gain_day_threshold": "",
+            "native_daynight_controls_color": False,
+            "native_daynight_controls_ircut": False,
+            "native_daynight_controls_ir850": False,
+            "native_daynight_controls_ir940": False,
+            "native_daynight_controls_white": False,
+            "native_daynight_schedule_enabled": False,
+            "native_daynight_schedule_start_at": "",
+            "native_daynight_schedule_stop_at": "",
             "native_image_brightness": "",
             "native_image_contrast": "",
             "native_image_saturation": "",
@@ -2154,6 +2341,10 @@ class Hub:
                 if stream_count is not None and stream_count >= 0 and stream_index >= stream_count:
                     continue
                 live_stream_config = live_stream_payloads.get(stream_name) or {}
+                osd_config = stream_config.get("osd") or {}
+                privacy_config = (osd_config.get("privacy") or {}) if isinstance(osd_config, dict) else {}
+                privacy_fill_color_value, privacy_fill_alpha = self._split_hex_color_alpha(privacy_config.get("fill_color"))
+                privacy_stroke_color_value, privacy_stroke_alpha = self._split_hex_color_alpha(privacy_config.get("stroke_color"))
                 stream_controls.append(
                     {
                         "name": stream_name,
@@ -2190,14 +2381,26 @@ class Hub:
                         "bitrate": "" if "bitrate" not in stream_config else str(stream_config.get("bitrate") or 0),
                         "format": str(stream_config.get("format") or "").strip(),
                         "mode": str(stream_config.get("mode") or "").strip(),
-                        "osd_enabled_supported": isinstance(stream_config.get("osd"), dict) and "enabled" in (stream_config.get("osd") or {}),
-                        "osd_enabled": bool(self._coerce_bool(((stream_config.get("osd") or {}).get("enabled")))),
-                        "osd_time_enabled_supported": isinstance(((stream_config.get("osd") or {}).get("time")), dict) and "enabled" in (((stream_config.get("osd") or {}).get("time")) or {}),
-                        "osd_time_enabled": bool(self._coerce_bool((((stream_config.get("osd") or {}).get("time") or {}).get("enabled")))),
-                        "osd_usertext_enabled_supported": isinstance(((stream_config.get("osd") or {}).get("usertext")), dict) and "enabled" in (((stream_config.get("osd") or {}).get("usertext")) or {}),
-                        "osd_usertext_enabled": bool(self._coerce_bool((((stream_config.get("osd") or {}).get("usertext") or {}).get("enabled")))),
-                        "osd_usertext_format_supported": isinstance(((stream_config.get("osd") or {}).get("usertext")), dict) and "format" in (((stream_config.get("osd") or {}).get("usertext")) or {}),
-                        "osd_usertext_format": str((((stream_config.get("osd") or {}).get("usertext") or {}).get("format") or "")).strip(),
+                        "osd_enabled_supported": isinstance(osd_config, dict) and "enabled" in osd_config,
+                        "osd_enabled": bool(self._coerce_bool((osd_config or {}).get("enabled"))),
+                        "osd_time_enabled_supported": isinstance((osd_config or {}).get("time"), dict) and "enabled" in (((osd_config or {}).get("time")) or {}),
+                        "osd_time_enabled": bool(self._coerce_bool((((osd_config or {}).get("time") or {}).get("enabled")))),
+                        "osd_usertext_enabled_supported": isinstance((osd_config or {}).get("usertext"), dict) and "enabled" in (((osd_config or {}).get("usertext")) or {}),
+                        "osd_usertext_enabled": bool(self._coerce_bool((((osd_config or {}).get("usertext") or {}).get("enabled")))),
+                        "osd_usertext_format_supported": isinstance((osd_config or {}).get("usertext"), dict) and "format" in (((osd_config or {}).get("usertext")) or {}),
+                        "osd_usertext_format": str((((osd_config or {}).get("usertext") or {}).get("format") or "")).strip(),
+                        "osd_privacy_enabled_supported": isinstance(privacy_config, dict) and "enabled" in privacy_config,
+                        "osd_privacy_enabled": bool(self._coerce_bool((privacy_config or {}).get("enabled"))),
+                        "osd_privacy_text_supported": isinstance(privacy_config, dict) and "text" in privacy_config,
+                        "osd_privacy_text": str((privacy_config or {}).get("text") or "").strip(),
+                        "osd_privacy_fill_color_supported": isinstance(privacy_config, dict) and "fill_color" in privacy_config,
+                        "osd_privacy_fill_color": str((privacy_config or {}).get("fill_color") or "").strip(),
+                        "osd_privacy_fill_color_value": privacy_fill_color_value,
+                        "osd_privacy_fill_alpha": privacy_fill_alpha,
+                        "osd_privacy_stroke_color_supported": isinstance(privacy_config, dict) and "stroke_color" in privacy_config,
+                        "osd_privacy_stroke_color": str((privacy_config or {}).get("stroke_color") or "").strip(),
+                        "osd_privacy_stroke_color_value": privacy_stroke_color_value,
+                        "osd_privacy_stroke_alpha": privacy_stroke_alpha,
                     }
                 )
 
@@ -2246,6 +2449,20 @@ class Hub:
                 "daynight": {
                     "enabled": self._coerce_bool(daynight.get("enabled")),
                     "force_mode": str(daynight.get("force_mode") or "").strip(),
+                    "total_gain_night_threshold": self._coerce_int(daynight.get("total_gain_night_threshold")),
+                    "total_gain_day_threshold": self._coerce_int(daynight.get("total_gain_day_threshold")),
+                    "controls": {
+                        "color": self._coerce_bool((daynight.get("controls") or {}).get("color")),
+                        "ircut": self._coerce_bool((daynight.get("controls") or {}).get("ircut")),
+                        "ir850": self._coerce_bool((daynight.get("controls") or {}).get("ir850")),
+                        "ir940": self._coerce_bool((daynight.get("controls") or {}).get("ir940")),
+                        "white": self._coerce_bool((daynight.get("controls") or {}).get("white")),
+                    },
+                    "schedule": {
+                        "enabled": self._coerce_bool((daynight.get("schedule") or {}).get("enabled")),
+                        "start_at": str((daynight.get("schedule") or {}).get("start_at") or "").strip(),
+                        "stop_at": str((daynight.get("schedule") or {}).get("stop_at") or "").strip(),
+                    },
                 },
             }
             anti_flicker = str(image.get("anti_flicker") or "").strip()
@@ -2265,6 +2482,13 @@ class Hub:
                         },
                     }
                 }
+                if first_stream.get("osd_privacy_enabled_supported"):
+                    patch_example[first_stream["name"]]["osd"]["privacy"] = {
+                        "enabled": first_stream.get("osd_privacy_enabled", False),
+                        "text": first_stream.get("osd_privacy_text") or "PRIVACY ENABLED",
+                        "fill_color": first_stream.get("osd_privacy_fill_color") or "#000000FF",
+                        "stroke_color": first_stream.get("osd_privacy_stroke_color") or "#FFFFFFFF",
+                    }
 
             defaults.update(
                 {
@@ -2297,6 +2521,16 @@ class Hub:
                     "native_daynight_modes": self._normalize_daynight_modes(daynight_caps.get("modes")),
                     "native_daynight_requested_mode": str(state_daynight.get("target_mode") or ("auto" if self._coerce_bool(daynight.get("enabled")) else str(daynight.get("force_mode") or "").strip()) or "auto").strip(),
                     "native_daynight_running_mode": str(state_daynight.get("running_mode") or "").strip(),
+                    "native_daynight_total_gain_night_threshold": "" if daynight.get("total_gain_night_threshold") in (None, "") else str(daynight.get("total_gain_night_threshold")),
+                    "native_daynight_total_gain_day_threshold": "" if daynight.get("total_gain_day_threshold") in (None, "") else str(daynight.get("total_gain_day_threshold")),
+                    "native_daynight_controls_color": bool(self._coerce_bool((daynight.get("controls") or {}).get("color"))),
+                    "native_daynight_controls_ircut": bool(self._coerce_bool((daynight.get("controls") or {}).get("ircut"))),
+                    "native_daynight_controls_ir850": bool(self._coerce_bool((daynight.get("controls") or {}).get("ir850"))),
+                    "native_daynight_controls_ir940": bool(self._coerce_bool((daynight.get("controls") or {}).get("ir940"))),
+                    "native_daynight_controls_white": bool(self._coerce_bool((daynight.get("controls") or {}).get("white"))),
+                    "native_daynight_schedule_enabled": bool(self._coerce_bool((daynight.get("schedule") or {}).get("enabled"))),
+                    "native_daynight_schedule_start_at": str((daynight.get("schedule") or {}).get("start_at") or "").strip(),
+                    "native_daynight_schedule_stop_at": str((daynight.get("schedule") or {}).get("stop_at") or "").strip(),
                     "config_patch_example": json.dumps(patch_example, indent=2),
                 }
             )
@@ -2644,6 +2878,21 @@ class Hub:
         scheme = parsed.scheme or "http"
         return urllib.parse.urlunsplit((scheme, parsed.netloc, f"/x/{normalized_stream}.mjpg", "", ""))
 
+    def _camera_rtsp_url(self, camera: Camera, stream_name: str = "ch0") -> str:
+        normalized_stream = str(stream_name or "ch0").strip().lower()
+        normalized_stream = normalized_stream.split("?", 1)[0].split("&", 1)[0] or "ch0"
+        if camera.ip:
+            return f"rtsp://{camera.ip}:554/{normalized_stream}"
+
+        snapshot_url = self._camera_snapshot_url(camera)
+        if not snapshot_url:
+            return ""
+
+        parsed = urllib.parse.urlsplit(snapshot_url)
+        if not parsed.hostname:
+            return ""
+        return f"rtsp://{parsed.hostname}:554/{normalized_stream}"
+
     def _camera_send2_controls_for_ui(self, camera: Camera) -> dict[str, Any]:
         defaults = {
             "native_send2_available": False,
@@ -2697,6 +2946,8 @@ class Hub:
                     "name": service_name,
                     "label": service_label,
                     "motion_key": motion_key,
+                    "photo_supported": True,
+                    "video_supported": has_send_video,
                     "motion_enabled": motion_enabled,
                     "photo_enabled": photo_enabled,
                     "video_enabled": video_enabled,
@@ -3154,6 +3405,66 @@ class Hub:
                     self.pending_by_request.pop(request_id, None)
         return result
 
+    def refresh_camera_mqtt_command_status(self, camera_id: str, *, wait_for_reply_seconds: float = 2.0) -> str:
+        resolved = self._resolve_camera_id(camera_id) or camera_id.strip().lower()
+        with self.state_lock:
+            camera = self.cameras.get(resolved)
+        if camera is None:
+            raise RuntimeError(f"Unknown camera: {camera_id}")
+
+        publish_result = self._publish_camera_command(
+            resolved,
+            "ping",
+            wait_for_reply_seconds=max(wait_for_reply_seconds, 0.5),
+        )
+        now = int(time.time())
+        status = "offline"
+        error = ""
+        last_ok_at = camera.mqtt_command_last_ok_at
+        if publish_result.get("published") and publish_result.get("reply_received") and publish_result.get("reply_ok") is not False:
+            status = "online"
+            last_ok_at = now
+        elif not publish_result.get("published") and not self.mqtt_connected:
+            status = "unknown"
+            error = "Hub MQTT is offline."
+        else:
+            error = str(publish_result.get("reply_text") or "").strip() or "Camera did not respond to hub MQTT commands; it likely published only a legacy registration and has no command subscription."
+
+        updated = replace(
+            camera,
+            mqtt_command_status=status,
+            mqtt_command_last_ok_at=last_ok_at,
+            mqtt_command_last_error=error,
+        )
+        with self.state_lock:
+            self.cameras[resolved] = updated
+        self._persist_state()
+        return status
+
+    def _camera_accepts_hub_commands(self, camera_id: str, *, probe_if_needed: bool = True) -> bool:
+        resolved = self._resolve_camera_id(camera_id) or camera_id.strip().lower()
+        with self.state_lock:
+            camera = self.cameras.get(resolved)
+        if camera is None:
+            raise RuntimeError(f"Unknown camera: {camera_id}")
+        if camera.mqtt_command_status == "online":
+            return True
+        if not probe_if_needed:
+            return False
+        return self.refresh_camera_mqtt_command_status(resolved) == "online"
+
+    def _camera_hub_command_error(self, camera_id: str) -> str:
+        resolved = self._resolve_camera_id(camera_id) or camera_id.strip().lower()
+        with self.state_lock:
+            camera = self.cameras.get(resolved)
+        if camera is None:
+            return "Unknown camera."
+        if camera.mqtt_command_last_error:
+            return camera.mqtt_command_last_error
+        if camera.mqtt_command_status == "unknown":
+            return "This camera has not yet proven that it accepts hub MQTT commands."
+        return "This camera published a registration but did not respond to hub MQTT commands."
+
     def export_config(self) -> dict[str, Any]:
         with self.state_lock:
             return json.loads(json.dumps(self.config))
@@ -3246,18 +3557,44 @@ class Hub:
         )
 
     def connect_camera(self, enrollment: dict[str, str]) -> dict[str, Any]:
-        result = self.install_pairing_bundle_via_mqtt(enrollment)
-        camera_id = str(result.get("camera_id") or enrollment.get("camera_id") or enrollment.get("id") or "").strip().lower()
+        camera_id = str(enrollment.get("camera_id") or enrollment.get("id") or "").strip().lower()
+        resolved = self._resolve_camera_id(camera_id) or camera_id
+        if not resolved:
+            raise RuntimeError("Connect flow did not resolve a camera ID")
+        with self.state_lock:
+            camera = self.cameras.get(resolved)
+        if camera is None:
+            raise RuntimeError(f"Unknown camera: {camera_id}")
+        if not self._camera_accepts_hub_commands(resolved, probe_if_needed=True):
+            raise RuntimeError(self._camera_hub_command_error(resolved))
+
+        previous_entry = self.export_camera_override(resolved) if resolved in self.static_camera_ids else {}
+        enrollment_entry = self._normalized_enrollment_entry({
+            **previous_entry,
+            **enrollment,
+            "camera_id": resolved,
+            "id": resolved,
+            "name": str(enrollment.get("name") or previous_entry.get("name") or camera.name),
+            "ip": str(enrollment.get("ip") or previous_entry.get("ip") or camera.ip),
+            "snapshot_url": str(enrollment.get("snapshot_url") or previous_entry.get("snapshot_url") or camera.snapshot_url),
+            "api_key": str(enrollment.get("api_key") or previous_entry.get("api_key") or camera.api_key),
+            "api_base_url": str(enrollment.get("api_base_url") or previous_entry.get("api_base_url") or camera.api_base_url),
+            "api_token": str(previous_entry.get("api_token") or ""),
+            "onvif_endpoint": str(enrollment.get("onvif_endpoint") or previous_entry.get("onvif_endpoint") or camera.onvif_endpoint),
+            "onvif_username": str(enrollment.get("onvif_username") or previous_entry.get("onvif_username") or camera.onvif_username),
+            "onvif_password": str(enrollment.get("onvif_password") or previous_entry.get("onvif_password") or camera.onvif_password),
+        })
+        enroll_result = self.enroll_camera(enrollment_entry)
         if not camera_id:
             raise RuntimeError("Connect flow did not resolve a camera ID")
         self._record_history_action(
-            camera_id,
+            resolved,
             "connect",
-            str(result.get("status") or "success"),
-            str(result.get("status_detail") or "Connected to hub").strip(),
+            "success",
+            "Connected to hub",
             source="hub",
             payload_summary=json.dumps({
-                "api_base_url": result.get("api_base_url"),
+                "api_base_url": enrollment_entry.get("api_base_url") or "",
             }, sort_keys=True),
         )
         onvif_username = str(enrollment.get("onvif_username") or "").strip()
@@ -3266,7 +3603,14 @@ class Hub:
             self._save_default_onvif_credentials(onvif_username, onvif_password or self.default_onvif_password)
         elif onvif_password and onvif_password != self.default_onvif_password:
             self._save_default_onvif_credentials(self.default_onvif_username, onvif_password)
-        return result
+        return {
+            **enroll_result,
+            "camera_id": resolved,
+            "status": "success",
+            "status_detail": f"Connected {resolved} to the hub.",
+            "api_base_url": enrollment_entry.get("api_base_url") or "",
+            "api_token": str(enrollment_entry.get("api_token") or ""),
+        }
 
     def _save_default_onvif_credentials(self, username: str, password: str) -> None:
         config = json.loads(json.dumps(self.config))
@@ -3511,6 +3855,8 @@ class Hub:
             camera = self.cameras.get(resolved)
         if camera is None:
             raise RuntimeError("MQTT pairing install requires the camera to be currently registered with the hub")
+        if not self._camera_accepts_hub_commands(resolved, probe_if_needed=True):
+            raise RuntimeError(self._camera_hub_command_error(resolved))
 
         save_entry = bundle.get("save_entry") if isinstance(bundle.get("save_entry"), dict) else {}
         pairing_camera = replace(
@@ -3620,7 +3966,7 @@ class Hub:
         last_error = ""
         while time.monotonic() < deadline:
             try:
-                self._fetch_camera_api_details(probe_camera)
+                self._camera_api_client(probe_camera).get_device()
             except Exception as error:
                 last_error = self._normalize_native_api_error(error)
                 time.sleep(1)
@@ -3991,13 +4337,38 @@ class Hub:
             camera = self.cameras.get(resolved)
         if camera is None:
             raise RuntimeError(f"Unknown camera: {camera_id}")
+        if camera.mqtt_command_status == "unknown":
+            try:
+                self.refresh_camera_mqtt_command_status(resolved)
+            except Exception:
+                LOG.debug("MQTT command capability probe failed for %s", resolved, exc_info=True)
+            with self.state_lock:
+                camera = self.cameras.get(resolved)
+            if camera is None:
+                raise RuntimeError(f"Unknown camera: {camera_id}")
         override = self.export_camera_override(resolved)
+        hub_connected = resolved in self.static_camera_ids
         conflict = self._camera_ip_conflict(camera)
         live_links_available = conflict is None
         api_error = self._normalize_native_api_error(camera.api_last_error)
         api_status = camera.api_status
         if camera.api_status == "offline" and api_error == "Native API is not available on this camera build.":
             api_status = "unsupported"
+        present_on_mqtt_broker = self._camera_registration_status_for_ui(camera) == "online"
+        is_paired = bool(self._camera_api_token(camera))
+        registered_on_hub = hub_connected or is_paired
+        has_agent = is_paired or camera.mqtt_command_status == "online"
+        setup_status = "pair"
+        if is_paired:
+            setup_status = "paired"
+        elif not present_on_mqtt_broker:
+            setup_status = "unavailable"
+        elif camera.mqtt_command_status == "unknown":
+            setup_status = "verifying"
+        elif not has_agent:
+            setup_status = "unavailable"
+        elif not registered_on_hub:
+            setup_status = "connect"
         preview_state = self._camera_preview_state(camera)
         camera_image_id = self._camera_image_id_for_ui(camera)
         return {
@@ -4008,6 +4379,12 @@ class Hub:
             "camera_image_id": camera_image_id,
             "ota_upgrade_command": self._camera_ota_upgrade_command_for_ui(camera),
             "snapshot_url": (self._camera_snapshot_url(camera) or "") if live_links_available else "",
+            "snapshot_ch1_url": (self._camera_snapshot_url(camera, "ch1") or "") if live_links_available else "",
+            "mjpeg_ch0_url": self._camera_mjpeg_url(camera, "ch0") if live_links_available else "",
+            "mjpeg_ch1_url": self._camera_mjpeg_url(camera, "ch1") if live_links_available else "",
+            "rtsp_ch0_url": self._camera_rtsp_url(camera, "ch0") if live_links_available else "",
+            "rtsp_ch1_url": self._camera_rtsp_url(camera, "ch1") if live_links_available else "",
+            "web_ui_url": self._camera_web_ui_url(camera) if live_links_available else "",
             "api_base_url": self._camera_api_base_url(camera) if live_links_available else "",
             "api_status": api_status,
             "api_last_ok_at": self._format_timestamp(camera.api_last_ok_at),
@@ -4033,6 +4410,10 @@ class Hub:
             "onvif_last_ok_at": self._format_timestamp(camera.onvif_last_ok_at),
             "onvif_last_error": camera.onvif_last_error,
             "preview_version": str(camera.last_snapshot_ok_at or camera.last_probe_at or 0),
+            "mqtt_command_status": camera.mqtt_command_status,
+            "mqtt_command_capable": camera.mqtt_command_status == "online",
+            "mqtt_command_last_ok_at": self._format_timestamp(camera.mqtt_command_last_ok_at),
+            "mqtt_command_last_error": camera.mqtt_command_last_error,
             "override_name": override.get("name", ""),
             "override_ip": override.get("ip", ""),
             "override_snapshot_url": override.get("snapshot_url", ""),
@@ -4043,7 +4424,12 @@ class Hub:
             "override_onvif_username": override.get("onvif_username", ""),
             "override_onvif_password": override.get("onvif_password", ""),
             "native_action_history": self._native_action_history_for_ui(resolved),
-            "hub_connected": bool(camera.api_token.strip()),
+            "hub_connected": registered_on_hub,
+            "present_on_mqtt_broker": present_on_mqtt_broker,
+            "has_agent": has_agent,
+            "registered_on_hub": registered_on_hub,
+            "is_paired": is_paired,
+            "setup_status": setup_status,
             "default_onvif_username": self.default_onvif_username,
             "default_onvif_password": self.default_onvif_password,
         }
@@ -4303,6 +4689,14 @@ class Hub:
             return ""
         return str(value)
 
+    def _split_hex_color_alpha(self, value: Any) -> tuple[str, str]:
+        normalized = str(value or "").strip().upper()
+        if re.fullmatch(r"#[0-9A-F]{8}", normalized):
+            return normalized[:7], str(int(normalized[7:], 16))
+        if re.fullmatch(r"#[0-9A-F]{6}", normalized):
+            return normalized, "255"
+        return "#000000", "255"
+
     def _coerce_bool(self, value: Any) -> bool | None:
         if isinstance(value, bool):
             return value
@@ -4345,31 +4739,7 @@ class Hub:
 
 
 def load_config_dict(config: dict[str, Any]) -> dict[str, Any]:
-    for section in ("telegram", "mqtt", "routing"):
-        if section not in config:
-            raise ValueError(f"Missing config section: {section}")
-    config.setdefault("ui", {})
-    config.setdefault("history", {})
-    config["ui"].setdefault("username", "")
-    config["ui"].setdefault("password", "")
-    config["ui"].setdefault("registration_stale_after_seconds", 0)
-    config["ui"].setdefault("snapshot_heartbeat_interval_seconds", 60)
-    config["ui"].setdefault("snapshot_heartbeat_timeout_seconds", 5)
-    config["ui"].setdefault("snapshot_cache_stale_after_seconds", 3600)
-    config["history"].setdefault("enabled", True)
-    config["history"].setdefault("path", "")
-    config["history"].setdefault("recent_actions_limit", 20)
-    config["history"].setdefault("max_action_events_per_camera", 1000)
-    config["history"].setdefault("max_state_samples_per_camera", 5000)
-    if not config["telegram"].get("token"):
-        raise ValueError("telegram.token is required")
-    if not config["mqtt"].get("host"):
-        raise ValueError("mqtt.host is required")
-    if not config["routing"].get("command_topic"):
-        raise ValueError("routing.command_topic is required")
-    if not config["routing"].get("reply_topic"):
-        raise ValueError("routing.reply_topic is required")
-    return config
+    return _load_config_dict(config)
 
 
 def load_config(path: str) -> dict[str, Any]:

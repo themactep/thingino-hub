@@ -165,15 +165,14 @@ class Send2ConfigUpdateTests(unittest.TestCase):
     def _capture_patch_calls(self) -> list[call]:
         """Run update_camera_send2_config and return all patch_setting calls."""
         recorded: list[call] = []
-        accepted = _json_response({"status": "accepted"})
-
-        original = CameraApiClient.patch_setting
 
         def recording_patch(self_inner: CameraApiClient, path: str, payload: dict[str, Any]) -> Any:
             recorded.append(call(path, payload))
             return {"status": "accepted"}
 
-        with patch.object(CameraApiClient, "patch_setting", recording_patch):
+        with patch.object(CameraApiClient, "get_capabilities", return_value={
+            "send2": {"telegram": {"send_photo": True, "send_video": True}}
+        }), patch.object(CameraApiClient, "patch_setting", recording_patch):
             self.hub.update_camera_send2_config("cam1", {
                 "telegram": {"send_photo": True, "send_video": False},
             })
@@ -211,7 +210,9 @@ class Send2ConfigUpdateTests(unittest.TestCase):
             recorded.append(call(path, payload))
             return {"status": "accepted"}
 
-        with patch.object(CameraApiClient, "patch_setting", recording_patch):
+        with patch.object(CameraApiClient, "get_capabilities", return_value={
+            "send2": {"telegram": {"send_photo": True, "send_video": True}}
+        }), patch.object(CameraApiClient, "patch_setting", recording_patch):
             self.hub.update_camera_send2_config("cam1", {
                 "motion": {"send2telegram": True},
             })
@@ -219,6 +220,29 @@ class Send2ConfigUpdateTests(unittest.TestCase):
         motion_call = next((c for c in recorded if "motion/outputs/send2/" in c.args[0]), None)
         self.assertIsNotNone(motion_call)
         self.assertIn("enabled", motion_call.args[1])
+
+    def test_unsupported_video_capability_is_not_patched(self) -> None:
+        recorded: list[call] = []
+
+        def recording_patch(self_inner: CameraApiClient, path: str, payload: dict[str, Any]) -> Any:
+            recorded.append(call(path, payload))
+            return {"status": "accepted"}
+
+        client = MagicMock(spec=CameraApiClient)
+        client.get_capabilities.return_value = {
+            "send2": {
+                "mqtt": {"send_photo": True, "send_video": False},
+            }
+        }
+        client.patch_setting.side_effect = lambda path, payload: recording_patch(client, path, payload)
+
+        with patch.object(self.hub, "_camera_api_client", return_value=client):
+            self.hub.update_camera_send2_config("cam1", {
+                "mqtt": {"send_photo": True, "send_video": False},
+            })
+
+        self.assertTrue(any("send2/services/mqtt/send-photo" in c.args[0] for c in recorded))
+        self.assertFalse(any("send2/services/mqtt/send-video" in c.args[0] for c in recorded))
 
 
 # ---------------------------------------------------------------------------
@@ -435,6 +459,8 @@ class Send2ControlsForUiTests(unittest.TestCase):
         services = self._run(caps, settings)
         svc = self._service(services, "mqtt")
         self.assertFalse(svc["video_enabled"])
+        self.assertTrue(svc["photo_supported"])
+        self.assertFalse(svc["video_supported"])
 
     def test_send2_not_in_config_raw_does_not_affect_result(self) -> None:
         """Even if backend.raw has no send2 key, values come from settings endpoints."""

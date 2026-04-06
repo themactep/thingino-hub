@@ -1,15 +1,9 @@
 {% extends "base.html" %}
 {% block content %}
-  <section class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3 mb-4">
-    <div>
-      <h1 class="h3 mb-1">{{ camera.name }} History</h1>
-      <p class="text-body-secondary mb-0">{{ camera.camera_id }}{% if camera.ip %} / {{ camera.ip }}{% endif %} / {{ camera.status }}</p>
-    </div>
-    <div class="d-flex flex-wrap gap-2">
-      <a class="btn btn-outline-secondary" href="{{ url_for('camera_detail', camera_id=camera.camera_id) }}">Back to Camera</a>
-      <a class="btn btn-outline-secondary" href="{{ url_for('dashboard') }}">Back to Dashboard</a>
-    </div>
-  </section>
+  {% set page_key = 'history' %}
+  {% set page_label = 'History' %}
+  {% set page_meta = camera.camera_id ~ ((' / ' ~ camera.ip) if camera.ip else '') ~ ((' / ' ~ camera.status) if camera.status else '') %}
+  {% include '_camera_page_header.html' %}
 
   <section class="card shadow-sm">
     <div class="card-body">

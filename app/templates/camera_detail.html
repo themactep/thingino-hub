@@ -1,63 +1,181 @@
 {% extends "base.html" %}
 {% block content %}
-  <style>
-    #camera-action-feedback {
-      position: fixed;
-      top: 1rem;
-      right: 1rem;
-      z-index: 1080;
-      width: min(34rem, calc(100vw - 2rem));
-      margin: 0;
-      box-shadow: 0 0.75rem 2rem rgba(0, 0, 0, 0.18);
-      opacity: 0;
-      transform: translateY(-0.5rem);
-      transition: opacity 160ms ease, transform 160ms ease;
-      pointer-events: none;
-    }
-
-    #camera-action-feedback.is-visible {
-      opacity: 1;
-      transform: translateY(0);
-      pointer-events: auto;
-    }
-  </style>
 
   <div data-camera-detail-page data-camera-id="{{ camera.camera_id }}" data-hydrate-url="{{ url_for('hydrate_camera_detail', camera_id=camera.camera_id) }}" data-payload-url="{{ url_for('camera_detail_hydration_state', camera_id=camera.camera_id) }}">
     <div id="camera-action-feedback" class="alert d-none" role="status" aria-live="polite"></div>
   </div>
 
-  <section class="mb-4">
-    <h2 class="mb-1">{{ camera.name }}</h2>
-    <p class="text-body-secondary mb-0">{{ camera.hostname or 'unknown host' }}{% if camera.ip %} / {{ camera.ip }}{% endif %}{% if camera.api_device_model %} / {{ camera.api_device_model }}{% endif %}</p>
-  </section>
+  {% set page_key = 'detail' %}
+  {% set page_label = 'Camera' %}
+  {% set page_meta = camera.camera_id ~ ((' / ' ~ camera.hostname) if camera.hostname else '') ~ ((' / ' ~ camera.ip) if camera.ip else '') ~ ((' / ' ~ camera.api_device_model) if camera.api_device_model else '') %}
+  {% include '_camera_page_header.html' %}
 
-  {% if camera.hub_connected %}
+  {% if camera.is_paired %}
   {% set dn_mode = camera.native_daynight_requested_mode or 'auto' %}
+  {% set send2_controls_disabled = camera.api_status != 'online' or (not camera.native_send2_available and not camera.native_send2_error) %}
+  {% set send2_default = namespace(service_name='', service_label='', send_type='') %}
+  {% set audio_default = namespace(name='', label='', short_label='', enabled=false) %}
+  {% for service in (camera.native_send2_services or []) %}
+    {% if not send2_default.service_name and service.photo_enabled %}
+      {% set send2_default.service_name = service.name %}
+      {% set send2_default.service_label = service.label ~ ' photo' %}
+      {% set send2_default.send_type = 'photo' %}
+    {% elif not send2_default.service_name and service.video_enabled %}
+      {% set send2_default.service_name = service.name %}
+      {% set send2_default.service_label = service.label ~ ' video' %}
+      {% set send2_default.send_type = 'video' %}
+    {% elif not send2_default.service_name and service.default_test_supported %}
+      {% set send2_default.service_name = service.name %}
+      {% set send2_default.service_label = service.label %}
+      {% set send2_default.send_type = '' %}
+    {% endif %}
+  {% endfor %}
+  {% for stream in (camera.native_stream_controls or []) %}
+    {% if not audio_default.name and stream.audio_enabled_supported %}
+      {% set audio_default.name = stream.name %}
+      {% set audio_default.label = stream.label %}
+      {% set audio_default.short_label = 'ch' ~ stream.stream_id %}
+      {% set audio_default.enabled = stream.audio_enabled %}
+    {% endif %}
+  {% endfor %}
   <div id="camera-control-bar" class="mb-4 d-flex flex-wrap gap-1">
 
     {# Motion #}
     {% if camera.native_motion_supported %}
-    <button type="button" id="cb-motion-btn"
-            class="btn btn-sm {{ 'btn-primary' if camera.native_motion_enabled else 'btn-secondary' }}"
-            data-cb-motion-toggle
-            aria-pressed="{{ 'true' if camera.native_motion_enabled else 'false' }}"
-            title="Toggle motion detection">
-      <i class="bi bi-person-walking"></i> Motion
-    </button>
+    <div class="btn-group">
+      <button type="button" id="cb-motion-btn"
+              class="btn btn-sm {{ 'btn-primary' if camera.native_motion_enabled else 'btn-secondary' }}"
+              data-cb-motion-toggle
+              aria-pressed="{{ 'true' if camera.native_motion_enabled else 'false' }}"
+              title="Toggle motion detection">
+        <i class="bi bi-person-walking"></i> Motion
+      </button>
+      <button type="button"
+              class="btn btn-sm {{ 'btn-primary' if camera.native_motion_enabled else 'btn-secondary' }} dropdown-toggle dropdown-toggle-split"
+              data-bs-toggle="dropdown" aria-expanded="false">
+        <span class="visually-hidden">Motion options</span>
+      </button>
+      <ul class="dropdown-menu">
+        <li>
+          <a class="dropdown-item" href="{{ url_for('camera_send2', camera_id=camera.camera_id) }}#motion-detection-settings">
+            <i class="bi bi-gear"></i> Motion settings
+          </a>
+        </li>
+        <li>
+          <a class="dropdown-item" href="{{ url_for('camera_send2', camera_id=camera.camera_id) }}">
+            <i class="bi bi-bell"></i> Send2 services
+          </a>
+        </li>
+      </ul>
+    </div>
     {% endif %}
+
+    {# Send #}
+    <div class="btn-group">
+      <button type="button"
+              class="btn btn-sm btn-secondary"
+              {% if send2_default.service_name and not send2_controls_disabled %}
+              data-send2-test-action="{{ url_for('send2_test', camera_id=camera.camera_id, service_name=send2_default.service_name) }}"
+              data-send2-service-label="{{ send2_default.service_label }}"
+              data-send2-type="{{ send2_default.send_type }}"
+              title="Run the default Send2 action"
+              {% else %}
+              disabled
+              title="No enabled Send2 action is available right now"
+              {% endif %}>
+        <i class="bi bi-send"></i> Send
+      </button>
+      <button type="button"
+              class="btn btn-sm btn-secondary dropdown-toggle dropdown-toggle-split"
+              data-bs-toggle="dropdown" aria-expanded="false">
+        <span class="visually-hidden">Send options</span>
+      </button>
+      <ul class="dropdown-menu">
+        {% if camera.native_send2_services %}
+          {% for service in camera.native_send2_services %}
+            {% if service.photo_enabled %}
+            <li>
+              <button type="button"
+                      class="dropdown-item"
+                      data-send2-test-action="{{ url_for('send2_test', camera_id=camera.camera_id, service_name=service.name) }}"
+                      data-send2-service-label="{{ service.label }} photo"
+                      data-send2-type="photo"
+                      {% if send2_controls_disabled %}disabled{% endif %}>
+                <i class="bi bi-image"></i> {{ service.label }} photo
+              </button>
+            </li>
+            {% endif %}
+            {% if service.video_enabled %}
+            <li>
+              <button type="button"
+                      class="dropdown-item"
+                      data-send2-test-action="{{ url_for('send2_test', camera_id=camera.camera_id, service_name=service.name) }}"
+                      data-send2-service-label="{{ service.label }} video"
+                      data-send2-type="video"
+                      {% if send2_controls_disabled %}disabled{% endif %}>
+                <i class="bi bi-film"></i> {{ service.label }} video
+              </button>
+            </li>
+            {% endif %}
+            {% if service.default_test_supported %}
+            <li>
+              <button type="button"
+                      class="dropdown-item"
+                      data-send2-test-action="{{ url_for('send2_test', camera_id=camera.camera_id, service_name=service.name) }}"
+                      data-send2-service-label="{{ service.label }}"
+                      {% if send2_controls_disabled %}disabled{% endif %}>
+                <i class="bi bi-send"></i> {{ service.label }}
+              </button>
+            </li>
+            {% endif %}
+          {% endfor %}
+          <li><hr class="dropdown-divider"></li>
+        {% else %}
+          <li><span class="dropdown-item-text text-body-secondary">No enabled Send2 actions</span></li>
+          <li><hr class="dropdown-divider"></li>
+        {% endif %}
+        <li>
+          <a class="dropdown-item" href="{{ url_for('camera_send2', camera_id=camera.camera_id) }}">
+            <i class="bi bi-gear"></i> Send2 settings
+          </a>
+        </li>
+      </ul>
+    </div>
 
     {# Privacy #}
     {% if camera.native_privacy_supported %}
     {% set privacy_new = 'false' if camera.native_privacy_enabled else 'true' %}
-    <button type="button" id="cb-privacy-btn"
-            class="btn btn-sm {{ 'btn-primary active' if camera.native_privacy_enabled else 'btn-secondary' }}"
-            data-async-action="{{ url_for('set_privacy', camera_id=camera.camera_id) }}"
-            data-async-payload='{"privacy_enabled":"{{ privacy_new }}","privacy_channel":"all"}'
-            data-privacy-channel="all"
-            aria-pressed="{{ 'true' if camera.native_privacy_enabled else 'false' }}"
-            title="Toggle privacy mask">
-      <i class="bi bi-eye-slash"></i> Privacy
-    </button>
+    <div class="btn-group">
+      <button type="button" id="cb-privacy-btn"
+              class="btn btn-sm {{ 'btn-primary active' if camera.native_privacy_enabled else 'btn-secondary' }}"
+              data-async-action="{{ url_for('set_privacy', camera_id=camera.camera_id) }}"
+              data-async-payload='{"privacy_enabled":"{{ privacy_new }}","privacy_channel":"all"}'
+              data-privacy-channel="all"
+              aria-pressed="{{ 'true' if camera.native_privacy_enabled else 'false' }}"
+              title="Toggle privacy mask">
+        <i class="bi bi-eye-slash"></i> Privacy
+      </button>
+      <button type="button"
+              class="btn btn-sm {{ 'btn-primary active' if camera.native_privacy_enabled else 'btn-secondary' }} dropdown-toggle dropdown-toggle-split"
+              data-bs-toggle="dropdown" aria-expanded="false">
+        <span class="visually-hidden">Privacy options</span>
+      </button>
+      <ul class="dropdown-menu">
+        <li>
+          <button type="button"
+                  class="dropdown-item"
+                  data-async-action="{{ url_for('set_privacy', camera_id=camera.camera_id) }}"
+                  data-async-payload='{"privacy_enabled":"{{ privacy_new }}","privacy_channel":"all"}'>
+            <i class="bi bi-eye-slash"></i> Toggle full privacy mask
+          </button>
+        </li>
+        <li>
+          <a class="dropdown-item" href="{{ url_for('camera_history', camera_id=camera.camera_id) }}">
+            <i class="bi bi-clock-history"></i> Review recent native actions
+          </a>
+        </li>
+      </ul>
+    </div>
     {% endif %}
 
     {# Day/Night #}
@@ -77,6 +195,9 @@
         <span class="visually-hidden">Day/night options</span>
       </button>
       <ul class="dropdown-menu">
+        <li><span class="dropdown-item-text text-body-secondary small">Requested: {{ camera.native_daynight_requested_mode or 'auto' }}</span></li>
+        <li><span class="dropdown-item-text text-body-secondary small">Runtime: {{ camera.native_daynight_running_mode or 'unknown' }}</span></li>
+        <li><hr class="dropdown-divider"></li>
         {% for mode in (camera.native_daynight_modes or ['auto', 'day', 'night']) %}
         <li>
           <button type="button"
@@ -89,6 +210,58 @@
           </button>
         </li>
         {% endfor %}
+        <li><hr class="dropdown-divider"></li>
+        <li>
+          <a class="dropdown-item" href="{{ url_for('camera_settings', camera_id=camera.camera_id) }}#daynight-settings">
+            <i class="bi bi-gear"></i> Day/night settings
+          </a>
+        </li>
+        <li>
+          <a class="dropdown-item" href="{{ url_for('camera_history', camera_id=camera.camera_id) }}">
+            <i class="bi bi-clock-history"></i> Day/night history
+          </a>
+        </li>
+      </ul>
+    </div>
+    {% endif %}
+
+    {# Audio #}
+    {% if audio_default.name %}
+    <div class="btn-group">
+      <button type="button" id="cb-audio-btn"
+              class="btn btn-sm {{ 'btn-primary' if audio_default.enabled else 'btn-secondary' }}"
+              data-async-action="{{ url_for('apply_supported_config', camera_id=camera.camera_id) }}"
+              data-audio-stream-target="{{ audio_default.name }}"
+              data-async-payload='{"redirect_page":"detail","{{ audio_default.name }}_audio_enabled_present":"1"{% if not audio_default.enabled %},"{{ audio_default.name }}_audio_enabled":"on"{% endif %}}'
+              title="Toggle audio for {{ audio_default.label }}">
+        <i class="bi {{ 'bi-volume-up' if audio_default.enabled else 'bi-volume-mute' }}" id="cb-audio-icon"></i>
+        <span id="cb-audio-label">Audio {{ audio_default.short_label }}</span>
+      </button>
+      <button type="button"
+              class="btn btn-sm {{ 'btn-primary' if audio_default.enabled else 'btn-secondary' }} dropdown-toggle dropdown-toggle-split"
+              data-bs-toggle="dropdown" aria-expanded="false">
+        <span class="visually-hidden">Audio options</span>
+      </button>
+      <ul class="dropdown-menu">
+        {% for stream in (camera.native_stream_controls or []) if stream.audio_enabled_supported %}
+        <li>
+          <button type="button"
+                  id="cb-audio-{{ stream.name }}-btn"
+                  class="dropdown-item {{ 'active' if stream.audio_enabled else '' }}"
+                  data-async-action="{{ url_for('apply_supported_config', camera_id=camera.camera_id) }}"
+                  data-audio-stream-target="{{ stream.name }}"
+                  data-audio-stream-label="{{ stream.label }}"
+                  data-async-payload='{"redirect_page":"detail","{{ stream.name }}_audio_enabled_present":"1"{% if not stream.audio_enabled %},"{{ stream.name }}_audio_enabled":"on"{% endif %}}'>
+            <i class="bi {{ 'bi-volume-up' if stream.audio_enabled else 'bi-volume-mute' }}"></i> {{ stream.label }} audio
+          </button>
+        </li>
+        {% endfor %}
+        <li><hr class="dropdown-divider"></li>
+        <li>
+          <a class="dropdown-item" href="{{ url_for('camera_settings', camera_id=camera.camera_id) }}#stream-audio-settings">
+            <i class="bi bi-sliders"></i> Stream audio settings
+          </a>
+        </li>
       </ul>
     </div>
     {% endif %}
@@ -102,82 +275,57 @@
     </button>
 
     {# Record #}
-    {% if camera.native_controls_available %}
+    {% if camera.native_record_supported or camera.snapshot_url or camera.snapshot_ch1_url %}
     <div class="btn-group">
       <button type="button"
               class="btn btn-sm btn-secondary"
               data-async-action="{{ url_for('record_clip', camera_id=camera.camera_id) }}"
               data-async-payload='{"record_stream_id":"0","record_duration_seconds":"10"}'
-              title="Record main stream (10s)">
+              title="Record main stream (10s)"
+              {% if not camera.native_record_supported %}disabled{% endif %}>
         <i class="bi bi-camera-reels"></i> Rec ch0
       </button>
       <button type="button"
-              class="btn btn-sm btn-secondary"
-              data-async-action="{{ url_for('record_clip', camera_id=camera.camera_id) }}"
-              data-async-payload='{"record_stream_id":"1","record_duration_seconds":"10"}'
-              title="Record substream (10s)">
-        ch1
-      </button>
-    </div>
-    {% endif %}
-
-    {# Send… #}
-    {% if camera.native_send2_available and camera.native_send2_services %}
-    <div class="btn-group">
-      <button type="button"
-              class="btn btn-sm btn-secondary dropdown-toggle"
-              data-bs-toggle="dropdown" aria-expanded="false"
-              title="Send photo or video via configured service">
-        <i class="bi bi-send"></i> Send…
+              class="btn btn-sm btn-secondary dropdown-toggle dropdown-toggle-split"
+              data-bs-toggle="dropdown" aria-expanded="false">
+        <span class="visually-hidden">Recorder options</span>
       </button>
       <ul class="dropdown-menu">
-        {% for service in camera.native_send2_services %}
-          {% if service.photo_enabled %}
-          <li>
-            <button type="button" class="dropdown-item"
-                    data-send2-test-action="{{ url_for('send2_test', camera_id=camera.camera_id, service_name=service.name) }}"
-                    data-send2-service-label="{{ service.label }} photo"
-                    data-send2-type="photo">
-              <i class="bi bi-image"></i> {{ service.label }} photo
-            </button>
-          </li>
-          {% endif %}
-          {% if service.video_enabled %}
-          <li>
-            <button type="button" class="dropdown-item"
-                    data-send2-test-action="{{ url_for('send2_test', camera_id=camera.camera_id, service_name=service.name) }}"
-                    data-send2-service-label="{{ service.label }} video"
-                    data-send2-type="video">
-              <i class="bi bi-film"></i> {{ service.label }} video
-            </button>
-          </li>
-          {% endif %}
-        {% endfor %}
+        <li>
+          <button type="button"
+                  class="dropdown-item"
+                  data-async-action="{{ url_for('record_clip', camera_id=camera.camera_id) }}"
+                  data-async-payload='{"record_stream_id":"0","record_duration_seconds":"10"}'
+                  {% if not camera.native_record_supported %}disabled{% endif %}>
+            <i class="bi bi-camera-reels"></i> Record ch0 (10s)
+          </button>
+        </li>
+        <li>
+          <button type="button"
+                  class="dropdown-item"
+                  data-async-action="{{ url_for('record_clip', camera_id=camera.camera_id) }}"
+                  data-async-payload='{"record_stream_id":"1","record_duration_seconds":"10"}'
+                  {% if not camera.native_record_supported %}disabled{% endif %}>
+            <i class="bi bi-camera-reels"></i> Record ch1 (10s)
+          </button>
+        </li>
+        <li><hr class="dropdown-divider"></li>
+        <li>
+          <a class="dropdown-item" href="#clip-recording">
+            <i class="bi bi-sliders"></i> Clip recording panel
+          </a>
+        </li>
+        <li>
+          <a class="dropdown-item" href="#timelapse-sources">
+            <i class="bi bi-stopwatch"></i> Timelapse sources
+          </a>
+        </li>
       </ul>
     </div>
     {% endif %}
 
   </div>
   {% endif %}
-
-      {% if not camera.hub_connected %}
-      <div class="border rounded p-3 mb-4">
-        <h3 class="h6 mb-2">Connect to Hub</h3>
-        <form action="{{ url_for('connect_camera', camera_id=camera.camera_id) }}" method="post" class="row g-3 align-items-end" data-async-form>
-          <div class="col-12 col-md-4">
-            <label class="form-label" for="connect_onvif_username">ONVIF username</label>
-            <input class="form-control" id="connect_onvif_username" type="text" name="onvif_username" value="{{ camera.override_onvif_username or camera.default_onvif_username }}" placeholder="thingino" autocomplete="off">
-          </div>
-          <div class="col-12 col-md-4">
-            <label class="form-label" for="connect_onvif_password">ONVIF password</label>
-            <input class="form-control" id="connect_onvif_password" type="password" name="onvif_password" value="{{ camera.override_onvif_password or camera.default_onvif_password }}" placeholder="thingino" autocomplete="off">
-          </div>
-          <div class="col-12 col-md-4 d-grid">
-            <button class="btn btn-primary" type="submit">Connect to Hub</button>
-          </div>
-        </form>
-      </div>
-      {% endif %}
 
   <div class="row g-3 mb-4">
     <div class="col-12 col-xl-7">
@@ -207,6 +355,31 @@
             <span id="live-preview-status-text" data-live-preview-status>Preview uses the live stream when available.</span>
             <span>API {{ camera.api_status or 'unknown' }}{% if camera.api_streamer %} / {{ camera.api_streamer }}{% endif %}</span>
           </div>
+        {% if camera.rtsp_ch0_url or camera.snapshot_url or camera.mjpeg_ch0_url %}
+          <div class="mt-3 pt-3 border-top">
+            <div class="small text-body-secondary mb-2">Camera Endpoints</div>
+            <div class="d-flex flex-wrap gap-3 small">
+            {% if camera.rtsp_ch0_url %}
+              <a class="cb text-body-secondary" href="{{ camera.rtsp_ch0_url }}" data-copy-text="{{ camera.rtsp_ch0_url }}">RTSP ch0</a>
+            {% endif %}
+            {% if camera.rtsp_ch1_url %}
+              <a class="cb text-body-secondary" href="{{ camera.rtsp_ch1_url }}" data-copy-text="{{ camera.rtsp_ch1_url }}">RTSP ch1</a>
+            {% endif %}
+            {% if camera.snapshot_url %}
+              <a class="cb text-body-secondary" href="{{ camera.snapshot_url }}" data-copy-text="{{ camera.snapshot_url }}">Snapshot ch0</a>
+            {% endif %}
+            {% if camera.snapshot_ch1_url %}
+              <a class="cb text-body-secondary" href="{{ camera.snapshot_ch1_url }}" data-copy-text="{{ camera.snapshot_ch1_url }}">Snapshot ch1</a>
+            {% endif %}
+            {% if camera.mjpeg_ch0_url %}
+              <a class="cb text-body-secondary" href="{{ camera.mjpeg_ch0_url }}" data-copy-text="{{ camera.mjpeg_ch0_url }}">MJPEG ch0</a>
+            {% endif %}
+            {% if camera.mjpeg_ch1_url %}
+              <a class="cb text-body-secondary" href="{{ camera.mjpeg_ch1_url }}" data-copy-text="{{ camera.mjpeg_ch1_url }}">MJPEG ch1</a>
+            {% endif %}
+            </div>
+          </div>
+        {% endif %}
         </div>
       </div>
     </div>
@@ -215,142 +388,29 @@
       <div class="card h-100">
         <div class="card-body">
           <div class="d-flex justify-content-between align-items-start gap-3 mb-3">
-            <div>
-              <h2 class="card-title h4 mb-1">Quick Controls</h2>
-              <p class="text-body-secondary mb-0">Place the day/night and runtime controls beside the preview, similar to the camera web UI.</p>
-            </div>
+            <h2 class="card-title h4 mb-1">Quick Controls</h2>
             <span class="badge rounded-pill {{ 'text-bg-success' if camera.status == 'online' else 'text-bg-danger' }}" data-camera-field="status">{{ camera.status }}</span>
           </div>
 
-          <form action="{{ url_for('apply_supported_config', camera_id=camera.camera_id) }}" method="post" class="border rounded p-3 mb-3" data-async-form>
-            <h3 class="h6 mb-3">Runtime Toggles</h3>
-            <div class="row g-3">
-              <div class="col-12 col-sm-6 d-flex align-items-end d-none">
-                <div class="form-check form-switch mb-0">
-                {% if camera.native_motion_supported %}
-                  <input type="hidden" name="motion_enabled_present" value="1">
-                {% endif %}
-                  <input class="form-check-input" id="motion_enabled" type="checkbox" name="motion_enabled" {% if camera.native_motion_enabled %}checked{% endif %} {% if not camera.native_motion_supported %}disabled{% endif %}>
-                  <label class="form-check-label" for="motion_enabled">Motion detection</label>
-                </div>
-              </div>
-              <div class="col-12 col-md-4">
-                <div class="form-label mb-2">Anti-flicker</div>
-                <input type="hidden" id="image_anti_flicker" name="image_anti_flicker" value="{{ camera.native_image_anti_flicker }}" {% if not camera.native_image_anti_flicker_supported %}disabled{% endif %}>
-                <div class="btn-group w-100" role="group" aria-label="Anti flicker mode">
-                  {% for anti_flicker_mode in ['off', '50hz', '60hz'] %}
-                    <button
-                      type="button"
-                      class="btn {% if (camera.native_image_anti_flicker or 'off')|lower == anti_flicker_mode %}btn-primary{% else %}btn-outline-secondary{% endif %}"
-                      data-anti-flicker-button="{{ anti_flicker_mode }}"
-                      data-anti-flicker-submit="true"
-                      {% if not camera.native_image_anti_flicker_supported %}disabled{% endif %}>{{ anti_flicker_mode|upper if anti_flicker_mode != 'off' else 'Off' }}</button>
-                  {% endfor %}
-                </div>
-              </div>
-              <div class="col-12 col-md-4">
-                <label class="form-label" for="image_hflip">Flip</label>
-                <div class="btn-group w-100" role="group" aria-label="Image flip controls">
-                {% if camera.native_image_hflip_supported %}
-                  <input type="hidden" name="image_hflip_present" value="1">
-                {% endif %}
-                  <input class="d-none" id="image_hflip" type="checkbox" name="image_hflip" {% if camera.native_image_hflip %}checked{% endif %} {% if not camera.native_image_hflip_supported %}disabled{% endif %}>
-                  <button
-                    type="button"
-                    class="btn {% if camera.native_image_hflip %}btn-primary{% else %}btn-outline-secondary{% endif %}"
-                    data-toggle-checkbox="image_hflip"
-                        data-toggle-checkbox-submit="true"
-                        aria-pressed="{{ 'true' if camera.native_image_hflip else 'false' }}"
-                    {% if not camera.native_image_hflip_supported %}disabled{% endif %}>Horizontal</button>
-                {% if camera.native_image_vflip_supported %}
-                  <input type="hidden" name="image_vflip_present" value="1">
-                {% endif %}
-                  <input class="d-none" id="image_vflip" type="checkbox" name="image_vflip" {% if camera.native_image_vflip %}checked{% endif %} {% if not camera.native_image_vflip_supported %}disabled{% endif %}>
-                  <button
-                    type="button"
-                    class="btn {% if camera.native_image_vflip %}btn-primary{% else %}btn-outline-secondary{% endif %}"
-                    data-toggle-checkbox="image_vflip"
-                        data-toggle-checkbox-submit="true"
-                        aria-pressed="{{ 'true' if camera.native_image_vflip else 'false' }}"
-                    {% if not camera.native_image_vflip_supported %}disabled{% endif %}>Vertical</button>
-                </div>
-              </div>
-            </div>
-            <div class="small text-body-secondary mt-3">Changes apply immediately.</div>
-          </form>
-
-          <div class="border rounded p-3">
-            <h3 class="h6 mb-3">Action Bar</h3>
-            <div class="d-flex flex-wrap gap-2">
-              <button type="button" class="btn btn-outline-secondary btn-sm" data-async-action="{{ url_for('pair_camera', camera_id=camera.camera_id) }}" data-confirm="Install agent pairing for {{ camera.name }} over MQTT and restore the native API listener?">Pair</button>
-              <button type="button" class="btn btn-outline-secondary btn-sm" data-async-action="{{ url_for('rescan_one', camera_id=camera.camera_id) }}">Rescan</button>
-              <button type="button" class="btn btn-outline-secondary btn-sm" data-async-action="{{ url_for('refresh_snapshot', camera_id=camera.camera_id) }}">Snapshot</button>
-              <button type="button" class="btn btn-outline-secondary btn-sm" data-async-action="{{ url_for('refresh_api', camera_id=camera.camera_id) }}">Native API</button>
-              <button type="button" class="btn btn-outline-secondary btn-sm" data-async-action="{{ url_for('refresh_onvif', camera_id=camera.camera_id) }}">ONVIF</button>
-            {% for service in camera.native_service_controls %}
-              {% for operation in service.operations %}
-                <button type="button" class="btn btn-outline-secondary btn-sm" data-async-action="{{ url_for('service_action', camera_id=camera.camera_id, service_name=service.service, operation=operation.name) }}">{{ operation.label }} {{ service.label }}</button>
-              {% endfor %}
-            {% endfor %}
-              <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('camera_history', camera_id=camera.camera_id) }}">History</a>
-            {% if camera.snapshot_url %}
-              <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('preview_snapshot', camera_id=camera.camera_id) }}" target="_blank" rel="noreferrer">Snapshot URL</a>
-            {% endif %}
-              <button type="button" class="btn btn-outline-danger btn-sm" data-async-action="{{ url_for('delete_camera', camera_id=camera.camera_id) }}" data-confirm="Remove {{ camera.name }} from the roster? It can reappear if the camera registers again.">Delete</button>
-            </div>
+          <h3 class="h6">Action Bar</h3>
+          {% set show_pair_quick_action = camera.setup_status == 'pair' if camera.setup_status is defined else (camera.hub_connected and camera.api_status != 'online' and (camera.mqtt_command_capable if camera.mqtt_command_capable is defined else true)) %}
+          <div class="d-flex flex-wrap gap-2 mb-4">
+          {% if show_pair_quick_action %}
+            <button type="button" class="btn btn-outline-secondary btn-sm" data-async-action="{{ url_for('pair_camera', camera_id=camera.camera_id) }}" data-confirm="Install agent pairing for {{ camera.name }} over MQTT and restore the native API listener?">Pair</button>
+          {% endif %}
+            <button type="button" class="btn btn-outline-secondary btn-sm" data-async-action="{{ url_for('rescan_one', camera_id=camera.camera_id) }}">Rescan</button>
+            <button type="button" class="btn btn-outline-secondary btn-sm" data-async-action="{{ url_for('refresh_snapshot', camera_id=camera.camera_id) }}">Snapshot</button>
+            <button type="button" class="btn btn-outline-secondary btn-sm" data-async-action="{{ url_for('refresh_api', camera_id=camera.camera_id) }}">Native API</button>
+            <button type="button" class="btn btn-outline-secondary btn-sm" data-async-action="{{ url_for('refresh_onvif', camera_id=camera.camera_id) }}">ONVIF</button>
+          {% if camera.snapshot_url %}
+            <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('preview_snapshot', camera_id=camera.camera_id) }}" target="_blank" rel="noreferrer">Snapshot URL</a>
+          {% endif %}
+          {% if camera.can_delete %}
+            <button type="button" class="btn btn-outline-danger btn-sm" data-async-action="{{ url_for('delete_camera', camera_id=camera.camera_id) }}" data-confirm="Remove {{ camera.name }} from the roster? It can reappear if the camera registers again.">Delete</button>
+          {% endif %}
           </div>
-        </div>
-      </div>
-    </article>
 
-    <article class="col-12 col-xl-6">
-      <div class="card h-100">
-        <div class="card-body">
-          <h2 class="card-title h4">Camera Info</h2>
-          <dl class="row mb-0">
-            <dt>Camera ID</dt><dd>{{ camera.camera_id }}</dd>
-            <dt>Camera Image ID</dt><dd>{{ camera.camera_image_id or 'unknown' }}</dd>
-            <dt>Hostname</dt><dd>{{ camera.hostname }}</dd>
-            <dt>IP</dt><dd>{{ camera.ip or 'n/a' }}</dd>
-            <dt>Snapshot URL</dt><dd>{{ camera.snapshot_url or 'not configured' }}</dd>
-            <dt>Native API</dt><dd>{{ camera.api_base_url or 'not configured' }}</dd>
-            <dt>API Status</dt><dd data-camera-field="api_status">{{ camera.api_status or 'unknown' }}</dd>
-            <dt>API Device</dt><dd data-camera-field="api_device_name">{{ camera.api_device_name or 'unknown' }}</dd>
-            <dt>API Model</dt><dd data-camera-field="api_device_model">{{ camera.api_device_model or 'unknown' }}</dd>
-            <dt>API Streamer</dt><dd data-camera-field="api_streamer">{{ camera.api_streamer or 'unknown' }}</dd>
-            <dt>API Version</dt><dd data-camera-field="api_version">{{ camera.api_version or 'unknown' }}</dd>
-            <dt>Last API Refresh</dt><dd data-camera-field="api_last_ok_at">{{ camera.api_last_ok_at or 'never' }}</dd>
-            <dt>API Error</dt><dd data-camera-field="api_last_error">{{ camera.api_last_error or 'none' }}</dd>
-            <dt>Last Registration</dt><dd data-camera-field="last_registration_at">{{ camera.last_registration_at or 'unknown' }}</dd>
-            <dt>Last Probe</dt><dd data-camera-field="last_probe_at">{{ camera.last_probe_at or 'never' }}</dd>
-            <dt>Last Snapshot OK</dt><dd data-camera-field="last_snapshot_ok_at">{{ camera.last_snapshot_ok_at or 'never' }}</dd>
-            <dt>Probe Error</dt><dd data-camera-field="last_probe_error">{{ camera.last_probe_error or 'none' }}</dd>
-          </dl>
-        {% if camera.ota_upgrade_command %}
-          <div class="mt-4">
-            <h3 class="h6">Firmware Rebuild and OTA Command</h3>
-            <p class="small text-body-secondary mb-2">Copy and paste this into the firmware workspace.</p>
-            <textarea class="form-control font-monospace" rows="2" readonly>{{ camera.ota_upgrade_command }}</textarea>
-          </div>
-        {% endif %}
-        </div>
-      </div>
-    </article>
-
-    <article class="col-12 col-xl-6">
-      <div class="card h-100">
-        <div class="card-body">
-          <h2 class="card-title h4">ONVIF</h2>
-          <dl class="row mb-0">
-            <dt>ONVIF Endpoint</dt><dd>{{ camera.onvif_endpoint or 'not configured' }}</dd>
-            <dt>Manufacturer</dt><dd data-camera-field="onvif_manufacturer">{{ camera.onvif_manufacturer or 'unknown' }}</dd>
-            <dt>Model</dt><dd data-camera-field="onvif_model">{{ camera.onvif_model or 'unknown' }}</dd>
-            <dt>Firmware</dt><dd data-camera-field="onvif_firmware_version">{{ camera.onvif_firmware_version or 'unknown' }}</dd>
-            <dt>Serial Number</dt><dd data-camera-field="onvif_serial_number">{{ camera.onvif_serial_number or 'unknown' }}</dd>
-            <dt>Hardware ID</dt><dd data-camera-field="onvif_hardware_id">{{ camera.onvif_hardware_id or 'unknown' }}</dd>
-            <dt>Last ONVIF Refresh</dt><dd data-camera-field="onvif_last_ok_at">{{ camera.onvif_last_ok_at or 'never' }}</dd>
-            <dt>ONVIF Error</dt><dd data-camera-field="onvif_last_error">{{ camera.onvif_last_error or 'none' }}</dd>
-          </dl>
+          <div class="small text-body-secondary">Persistent imaging, motion, and stream settings moved to the Settings page. Send2 services and on-demand send tests live on the Send2 page. Metadata and long-term settings live on dedicated pages. Advanced access adds override and action-log pages, and expert access unlocks the raw native patch editor.</div>
         </div>
       </div>
     </article>
@@ -358,12 +418,12 @@
 
   <section class="card shadow-sm">
     <div class="card-body">
-      <h2 class="card-title">Native API Actions</h2>
+      <h2 class="card-title h4">Native API Actions</h2>
       <p>These are the less frequently used controls that don’t need to sit in the preview-side control bar.</p>
       <div class="row g-4 mb-4">
         <div class="col-12 col-lg-6">
-          <form action="{{ url_for('record_clip', camera_id=camera.camera_id) }}" method="post" class="border rounded p-3 h-100" data-async-form>
-            <h3>Clip Recording</h3>
+          <form action="{{ url_for('record_clip', camera_id=camera.camera_id) }}" method="post" class="border rounded p-3 h-100" data-async-form id="clip-recording">
+            <h3 class="h6 mb-3">Clip Recording</h3>
             <div class="row g-3">
               <div class="col-6">
                 <label class="form-label" for="record_duration_seconds">Duration (s)</label>
@@ -381,330 +441,23 @@
             <button class="btn btn-outline-primary mt-3" type="submit" {% if not camera.native_record_supported %}disabled{% endif %}>Start Clip Recording</button>
           </form>
         </div>
-      </div>
-
-      <h2>Recent Native Actions</h2>
-      <div id="native-action-history">
-      {% if camera.native_action_history %}
-        <div class="table-responsive mb-4">
-          <table class="table table-sm align-middle mb-0">
-            <thead>
-              <tr>
-                <th scope="col">When</th>
-                <th scope="col">Action</th>
-                <th scope="col">Status</th>
-                <th scope="col">Source</th>
-                <th scope="col">Detail</th>
-              </tr>
-            </thead>
-            <tbody id="native-action-history-body">
-            {% for entry in camera.native_action_history %}
-              <tr>
-                <td class="text-nowrap">{{ entry.at or 'just now' }}</td>
-                <td class="text-capitalize">{{ entry.action }}</td>
-                <td>
-                {% if entry.status == 'success' %}
-                  <span class="badge text-bg-success">success</span>
-                {% elif entry.status == 'error' %}
-                  <span class="badge text-bg-danger">error</span>
-                {% else %}
-                  <span class="badge text-bg-secondary">{{ entry.status }}</span>
-                {% endif %}
-                </td>
-                <td class="text-nowrap text-body-secondary">{{ entry.source or 'native_api' }}</td>
-                <td class="text-break">{{ entry.detail or 'n/a' }}</td>
-              </tr>
-            {% endfor %}
-            </tbody>
-          </table>
-        </div>
-      {% else %}
-        <p class="text-body-secondary mb-4" id="native-action-history-empty">No native actions have been issued from the hub for this camera yet.</p>
-      {% endif %}
-      </div>
-
-      <h2>Supported Camera Controls</h2>
-      <p>These fields map to the camera-side native API shim plus the legacy send2 utility endpoint used for notifications and snapshots.</p>
-    {% if camera.identity_conflict_error %}
-      <div class="alert alert-warning" role="alert">{{ camera.identity_conflict_error }}</div>
-    {% endif %}
-    {% if camera.native_controls_error %}
-      <div class="alert alert-warning" role="alert">Could not load live camera config: {{ camera.native_controls_error }}</div>
-    {% endif %}
-      <form action="{{ url_for('apply_supported_config', camera_id=camera.camera_id) }}" method="post" class="mb-4" data-async-form>
-        <fieldset {% if not camera.native_controls_available and not camera.native_send2_available %}disabled{% endif %}>
-          <div class="row g-3">
-            <div class="col-12 col-md-3">
-              <label class="form-label" for="image_brightness">Brightness</label>
-              <input class="form-control" id="image_brightness" type="number" name="image_brightness" min="0" max="255" value="{{ camera.native_image_brightness }}" {% if not camera.native_image_controls_supported %}disabled{% endif %}>
-            </div>
-            <div class="col-12 col-md-3">
-              <label class="form-label" for="image_contrast">Contrast</label>
-              <input class="form-control" id="image_contrast" type="number" name="image_contrast" min="0" max="255" value="{{ camera.native_image_contrast }}" {% if not camera.native_image_controls_supported %}disabled{% endif %}>
-            </div>
-            <div class="col-12 col-md-3">
-              <label class="form-label" for="image_saturation">Saturation</label>
-              <input class="form-control" id="image_saturation" type="number" name="image_saturation" min="0" max="255" value="{{ camera.native_image_saturation }}" {% if not camera.native_image_controls_supported %}disabled{% endif %}>
-            </div>
-            <div class="col-12 col-md-3">
-              <label class="form-label" for="image_sharpness">Sharpness</label>
-              <input class="form-control" id="image_sharpness" type="number" name="image_sharpness" min="0" max="255" value="{{ camera.native_image_sharpness }}" {% if not camera.native_image_controls_supported %}disabled{% endif %}>
-            </div>
-            <div class="col-12 col-md-8">
-              <label class="form-label" for="daynight_force_mode">Day/night force mode</label>
-              <select class="form-select" id="daynight_force_mode" name="daynight_force_mode" {% if not camera.native_daynight_supported %}disabled{% endif %}>
-              {% for mode in camera.native_daynight_modes %}
-                {% set option_value = '' if mode == 'auto' else mode %}
-                <option value="{{ option_value }}" {% if camera.native_daynight_force_mode == option_value %}selected{% endif %}>{{ 'Automatic' if mode == 'auto' else mode|capitalize }}</option>
-              {% endfor %}
-              </select>
-            {% if camera.native_daynight_running_mode %}
-              <div class="form-text">Current runtime mode: {{ camera.native_daynight_running_mode }}</div>
+        <div class="col-12 col-lg-6">
+          <div class="border rounded p-3 h-100" id="timelapse-sources">
+            <h3 class="h6 mb-3">Timelapse Sources</h3>
+            <p class="text-body-secondary">The hub does not orchestrate timelapse captures yet, but these snapshot endpoints are ready for cron jobs, Home Assistant, or any external collector.</p>
+            <div class="d-flex flex-column gap-2 small">
+            {% if camera.snapshot_url %}
+              <a class="cb text-body-secondary" href="{{ camera.snapshot_url }}" data-copy-text="{{ camera.snapshot_url }}">Snapshot source ch0</a>
+            {% endif %}
+            {% if camera.snapshot_ch1_url %}
+              <a class="cb text-body-secondary" href="{{ camera.snapshot_ch1_url }}" data-copy-text="{{ camera.snapshot_ch1_url }}">Snapshot source ch1</a>
+            {% endif %}
+            {% if not camera.snapshot_url and not camera.snapshot_ch1_url %}
+              <span class="text-body-secondary">No snapshot endpoints are available for this camera right now.</span>
             {% endif %}
             </div>
-          {% if camera.native_send2_available or camera.native_send2_error %}
-            <div class="col-12"><hr class="my-1"></div>
-            <div class="col-12 col-lg-6">
-              <label class="form-label" for="send2_motion_sensitivity">Motion sensitivity for notifications</label>
-              <input class="form-control" id="send2_motion_sensitivity" type="number" name="send2_motion_sensitivity" min="1" max="8" value="{{ camera.native_send2_motion_sensitivity }}" {% if not camera.native_send2_available %}disabled{% endif %}>
-            </div>
-            <div class="col-12 col-lg-6">
-              <label class="form-label" for="send2_motion_cooldown">Notification cooldown seconds</label>
-              <input class="form-control" id="send2_motion_cooldown" type="number" name="send2_motion_cooldown" min="1" max="60" value="{{ camera.native_send2_motion_cooldown }}" {% if not camera.native_send2_available %}disabled{% endif %}>
-            </div>
-            <div class="col-12">
-              <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
-                <div>
-                  <h3 class="h6 mb-1">Send2 Services</h3>
-                  <p class="text-body-secondary mb-0">Choose which camera-side send2 scripts run on motion, then trigger a test without leaving the hub.</p>
-                </div>
-              </div>
-            {% if camera.native_send2_error %}
-              <div class="alert alert-warning mb-0">Send2 overview is unavailable right now: {{ camera.native_send2_error }}</div>
-            {% elif camera.native_send2_services %}
-              <div class="table-responsive">
-                <table class="table table-sm align-middle mb-0">
-                  <thead>
-                    <tr>
-                      <th scope="col">Service</th>
-                      <th scope="col">On Motion</th>
-                      <th scope="col">Photo</th>
-                      <th scope="col">Video</th>
-                      <th scope="col">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                {% for service in camera.native_send2_services %}
-                    <tr>
-                      <td>
-                        <div class="fw-semibold">{{ service.label }}</div>
-                      </td>
-                    <td>
-                      <div class="form-check form-switch m-0">
-                        <input type="hidden" name="motion_send2{{ service.name }}_present" value="1">
-                        <input class="form-check-input" type="checkbox" id="motion_send2{{ service.name }}" name="motion_send2{{ service.name }}" data-send2-motion-toggle="true" {% if service.motion_enabled %}checked{% endif %} {% if not camera.native_send2_available %}disabled{% endif %}>
-                      </div>
-                    </td>
-                    <td>
-                      <div class="form-check form-switch m-0">
-                        <input type="hidden" name="send2{{ service.name }}_photo_present" value="1">
-                        <input class="form-check-input" type="checkbox" id="send2{{ service.name }}_photo" name="send2{{ service.name }}_photo" data-send2-media-toggle="true" {% if service.photo_enabled %}checked{% endif %} {% if not camera.native_send2_available %}disabled{% endif %}>
-                      </div>
-                    </td>
-                    <td>
-                      <div class="form-check form-switch m-0">
-                        <input type="hidden" name="send2{{ service.name }}_video_present" value="1">
-                        <input class="form-check-input" type="checkbox" id="send2{{ service.name }}_video" name="send2{{ service.name }}_video" data-send2-media-toggle="true" {% if service.video_enabled %}checked{% endif %} {% if not camera.native_send2_available %}disabled{% endif %}>
-                      </div>
-                    </td>
-                    <td>
-                      <div class="d-flex flex-wrap gap-2">
-                        <button type="button" class="btn btn-outline-secondary btn-sm" data-send2-test-action="{{ url_for('send2_test', camera_id=camera.camera_id, service_name=service.name) }}" data-send2-service-label="{{ service.label }} photo" data-send2-type="photo" data-send2-photo-action="{{ service.name }}" {% if not camera.native_send2_available or not service.photo_enabled %}disabled{% endif %}>Send Photo</button>
-                        <button type="button" class="btn btn-outline-secondary btn-sm" data-send2-test-action="{{ url_for('send2_test', camera_id=camera.camera_id, service_name=service.name) }}" data-send2-service-label="{{ service.label }} video" data-send2-type="video" data-send2-video-action="{{ service.name }}" {% if not camera.native_send2_available or not service.video_enabled %}disabled{% endif %}>Send Video</button>
-                      </div>
-                    </td>
-                  </tr>
-                {% endfor %}
-                </table>
-              </div>
-              {% endif %}
-            </div>
-          {% endif %}
           </div>
-        {% if camera.native_stream_controls %}
-          <div class="row g-3 mt-1">
-          {% for stream in camera.native_stream_controls %}
-            <div class="col-12 col-xl-6">
-              <div class="border rounded p-3 h-100">
-                <h3 class="h6 mb-3">{{ stream.label }}</h3>
-                <div class="row g-3">
-                  <div class="col-12 col-sm-6 d-flex align-items-end">
-                    <div class="form-check mb-2">
-                    {% if stream.enabled_supported %}
-                      <input type="hidden" name="{{ stream.name }}_enabled_present" value="1">
-                    {% endif %}
-                      <input class="form-check-input" id="{{ stream.name }}_enabled" type="checkbox" name="{{ stream.name }}_enabled" {% if stream.enabled %}checked{% endif %} {% if not stream.enabled_supported %}disabled{% endif %}>
-                      <label class="form-check-label" for="{{ stream.name }}_enabled">Stream enabled</label>
-                    </div>
-                  </div>
-                  <div class="col-12 col-sm-6 d-flex align-items-end">
-                    <div class="form-check mb-2">
-                    {% if stream.audio_enabled_supported %}
-                      <input type="hidden" name="{{ stream.name }}_audio_enabled_present" value="1">
-                    {% endif %}
-                      <input class="form-check-input" id="{{ stream.name }}_audio_enabled" type="checkbox" name="{{ stream.name }}_audio_enabled" {% if stream.audio_enabled %}checked{% endif %} {% if not stream.audio_enabled_supported %}disabled{% endif %}>
-                      <label class="form-check-label" for="{{ stream.name }}_audio_enabled">Audio enabled</label>
-                    </div>
-                  </div>
-                  <div class="col-6 col-md-3">
-                    <label class="form-label" for="{{ stream.name }}_width">Width</label>
-                    <input class="form-control" id="{{ stream.name }}_width" type="number" name="{{ stream.name }}_width" value="{{ stream.width }}" {% if not stream.width_supported %}disabled{% endif %}>
-                  </div>
-                  <div class="col-6 col-md-3">
-                    <label class="form-label" for="{{ stream.name }}_height">Height</label>
-                    <input class="form-control" id="{{ stream.name }}_height" type="number" name="{{ stream.name }}_height" value="{{ stream.height }}" {% if not stream.height_supported %}disabled{% endif %}>
-                  </div>
-                  <div class="col-6 col-md-3">
-                    <label class="form-label" for="{{ stream.name }}_fps">FPS</label>
-                    <input class="form-control" id="{{ stream.name }}_fps" type="number" name="{{ stream.name }}_fps" value="{{ stream.fps }}" {% if not stream.fps_supported %}disabled{% endif %}>
-                  </div>
-                  <div class="col-6 col-md-3">
-                    <label class="form-label" for="{{ stream.name }}_bitrate">Bitrate</label>
-                    <input class="form-control" id="{{ stream.name }}_bitrate" type="number" name="{{ stream.name }}_bitrate" value="{{ stream.bitrate }}" {% if not stream.bitrate_supported %}disabled{% endif %}>
-                  </div>
-                  <div class="col-12 col-md-6">
-                    <label class="form-label" for="{{ stream.name }}_format">Format</label>
-                    <input class="form-control" id="{{ stream.name }}_format" type="text" name="{{ stream.name }}_format" value="{{ stream.format }}" {% if not stream.format_supported %}disabled{% endif %}>
-                  </div>
-                  <div class="col-12 col-md-6">
-                    <label class="form-label" for="{{ stream.name }}_mode">Mode</label>
-                    <input class="form-control" id="{{ stream.name }}_mode" type="text" name="{{ stream.name }}_mode" value="{{ stream.mode }}" {% if not stream.mode_supported %}disabled{% endif %}>
-                  </div>
-                  <div class="col-12"><hr class="my-1"></div>
-                  <div class="col-12 col-sm-4 d-flex align-items-end">
-                    <div class="form-check mb-2">
-                    {% if stream.osd_enabled_supported %}
-                      <input type="hidden" name="{{ stream.name }}_osd_enabled_present" value="1">
-                    {% endif %}
-                      <input class="form-check-input" id="{{ stream.name }}_osd_enabled" type="checkbox" name="{{ stream.name }}_osd_enabled" {% if stream.osd_enabled %}checked{% endif %} {% if not stream.osd_enabled_supported %}disabled{% endif %}>
-                      <label class="form-check-label" for="{{ stream.name }}_osd_enabled">Overlay enabled</label>
-                    </div>
-                  </div>
-                  <div class="col-12 col-sm-4 d-flex align-items-end">
-                    <div class="form-check mb-2">
-                    {% if stream.osd_time_enabled_supported %}
-                      <input type="hidden" name="{{ stream.name }}_osd_time_enabled_present" value="1">
-                    {% endif %}
-                      <input class="form-check-input" id="{{ stream.name }}_osd_time_enabled" type="checkbox" name="{{ stream.name }}_osd_time_enabled" {% if stream.osd_time_enabled %}checked{% endif %} {% if not stream.osd_time_enabled_supported %}disabled{% endif %}>
-                      <label class="form-check-label" for="{{ stream.name }}_osd_time_enabled">Time overlay</label>
-                    </div>
-                  </div>
-                  <div class="col-12 col-sm-4 d-flex align-items-end">
-                    <div class="form-check mb-2">
-                    {% if stream.osd_usertext_enabled_supported %}
-                      <input type="hidden" name="{{ stream.name }}_osd_usertext_enabled_present" value="1">
-                    {% endif %}
-                      <input class="form-check-input" id="{{ stream.name }}_osd_usertext_enabled" type="checkbox" name="{{ stream.name }}_osd_usertext_enabled" {% if stream.osd_usertext_enabled %}checked{% endif %} {% if not stream.osd_usertext_enabled_supported %}disabled{% endif %}>
-                      <label class="form-check-label" for="{{ stream.name }}_osd_usertext_enabled">Label overlay</label>
-                    </div>
-                  </div>
-                  <div class="col-12">
-                    <label class="form-label" for="{{ stream.name }}_osd_usertext_format">Label text</label>
-                    <input class="form-control" id="{{ stream.name }}_osd_usertext_format" type="text" name="{{ stream.name }}_osd_usertext_format" value="{{ stream.osd_usertext_format }}" {% if not stream.osd_usertext_format_supported %}disabled{% endif %}>
-                  </div>
-                </div>
-              </div>
-            </div>
-            {% endfor %}
-          </div>
-          {% endif %}
-          <div class="d-flex flex-wrap gap-2 mt-4">
-            <button class="btn btn-primary" type="submit">Apply Supported Settings</button>
-          </div>
-        </fieldset>
-      </form>
-
-      <h2>Native API Config Patch</h2>
-      <p>Send a JSON object to the camera via PATCH /config. The current camera-side shim applies the runtime payload and persists a supported subset.</p>
-      <form action="{{ url_for('patch_config', camera_id=camera.camera_id) }}" method="post" class="mb-4" data-async-form>
-        <div class="mb-3">
-          <label class="form-label" for="config_patch">JSON payload</label>
-          <textarea class="form-control font-monospace" id="config_patch" name="config_patch" rows="8" spellcheck="false">{{ camera.config_patch_example }}</textarea>
         </div>
-        <button class="btn btn-outline-primary" type="submit">Apply Native Config Patch</button>
-      </form>
-
-      <h2>Send2 Test Output</h2>
-      <p>Last on-demand send2 test launched from the hub. Verbose output is requested so script failures are visible without opening the camera UI.</p>
-      <pre class="form-control font-monospace mb-4" id="send2-test-output" style="min-height: 10rem; white-space: pre-wrap;">No send2 test has been run from the hub yet.</pre>
-
-      <h2>Camera Overrides</h2>
-      <p>These values are stored in the hub YAML and override or supplement auto-registered metadata for this camera.</p>
-      <p class="small text-body-secondary">Deleting a camera removes saved overrides, drops it from the current roster, and tries to clear the retained MQTT registration. A live camera can still re-register itself later.</p>
-     <div class="row g-4">
-        <div class="col-12 col-lg-4">
-          <form action="{{ url_for('camera_detail', camera_id=camera.camera_id) }}" method="post" class="border rounded p-3 h-100">
-            <h3 class="h6 mb-3">General Overrides</h3>
-            <div class="row g-3">
-              <div class="col-12">
-                <label class="form-label" for="override_name">Display name</label>
-                <input class="form-control" id="override_name" type="text" name="name" value="{{ camera.override_name }}">
-              </div>
-              <div class="col-12">
-                <label class="form-label" for="override_ip">IP override</label>
-                <input class="form-control" id="override_ip" type="text" name="ip" value="{{ camera.override_ip }}">
-              </div>
-              <div class="col-12">
-                <label class="form-label" for="override_snapshot_url">Snapshot URL override</label>
-                <input class="form-control" id="override_snapshot_url" type="text" name="snapshot_url" value="{{ camera.override_snapshot_url }}">
-              </div>
-            </div>
-            <button class="btn btn-primary mt-3" type="submit">Save General Overrides</button>
-          </form>
-        </div>
-        <div class="col-12 col-lg-4">
-          <form action="{{ url_for('camera_detail', camera_id=camera.camera_id) }}" method="post" class="border rounded p-3 h-100">
-            <h3 class="h6 mb-3">Native API Overrides</h3>
-            <div class="row g-3">
-              <div class="col-12">
-                <label class="form-label" for="override_api_base_url">Native API base URL override</label>
-                <input class="form-control" id="override_api_base_url" type="text" name="api_base_url" value="{{ camera.override_api_base_url }}">
-              </div>
-              <div class="col-12">
-                <label class="form-label" for="override_api_key">API key override</label>
-                <input class="form-control" id="override_api_key" type="password" name="api_key" value="{{ camera.override_api_key }}" autocomplete="off">
-              </div>
-              <div class="col-12">
-                <label class="form-label" for="override_api_token">Native API bearer token</label>
-                <input class="form-control" id="override_api_token" type="password" name="api_token" value="{{ camera.override_api_token }}" autocomplete="off">
-              </div>
-            </div>
-            <button class="btn btn-primary mt-3" type="submit">Save Native API Overrides</button>
-          </form>
-        </div>
-        <div class="col-12 col-lg-4">
-          <form action="{{ url_for('camera_detail', camera_id=camera.camera_id) }}" method="post" class="border rounded p-3 h-100">
-            <h3 class="h6 mb-3">ONVIF Overrides</h3>
-            <div class="row g-3">
-              <div class="col-12">
-                <label class="form-label" for="override_onvif_endpoint">ONVIF endpoint override</label>
-                <input class="form-control" id="override_onvif_endpoint" type="text" name="onvif_endpoint" value="{{ camera.override_onvif_endpoint }}">
-              </div>
-              <div class="col-12">
-                <label class="form-label" for="override_onvif_username">ONVIF username</label>
-                <input class="form-control" id="override_onvif_username" type="text" name="onvif_username" value="{{ camera.override_onvif_username }}" autocomplete="off">
-              </div>
-              <div class="col-12">
-                <label class="form-label" for="override_onvif_password">ONVIF password</label>
-                <input class="form-control" id="override_onvif_password" type="password" name="onvif_password" value="{{ camera.override_onvif_password }}" autocomplete="off">
-              </div>
-            </div>
-            <button class="btn btn-primary mt-3" type="submit">Save ONVIF Overrides</button>
-          </form>
-        </div>
-      </div>
-      <div class="d-flex flex-wrap gap-2 mt-4">
-        <a class="btn btn-outline-secondary" href="{{ url_for('dashboard') }}">Back to Roster</a>
       </div>
     </div>
   </section>
@@ -1148,6 +901,69 @@
         }
       }
 
+      function buildAudioPayload(streamName, enabled) {
+        const payload = {
+          redirect_page: 'detail',
+        };
+        payload[`${streamName}_audio_enabled_present`] = '1';
+        if (enabled) {
+          payload[`${streamName}_audio_enabled`] = 'on';
+        }
+        return payload;
+      }
+
+      function updateAudioControls(camera) {
+        const streams = Array.isArray(camera.native_stream_controls) ? camera.native_stream_controls : [];
+        const supportedStreams = streams.filter((stream) => Boolean(stream.audio_enabled_supported));
+        if (!supportedStreams.length) {
+          return;
+        }
+
+        const primaryButton = document.getElementById('cb-audio-btn');
+        const primaryIcon = document.getElementById('cb-audio-icon');
+        const primaryLabel = document.getElementById('cb-audio-label');
+        if (primaryButton) {
+          const currentName = primaryButton.getAttribute('data-audio-stream-target') || supportedStreams[0].name;
+          const currentStream = supportedStreams.find((stream) => stream.name === currentName) || supportedStreams[0];
+          const enabled = Boolean(currentStream.audio_enabled);
+          primaryButton.setAttribute('data-audio-stream-target', currentStream.name);
+          primaryButton.setAttribute('data-async-payload', JSON.stringify(buildAudioPayload(currentStream.name, !enabled)));
+          primaryButton.classList.toggle('btn-primary', enabled);
+          primaryButton.classList.toggle('btn-secondary', !enabled);
+          primaryButton.setAttribute('title', `Toggle audio for ${currentStream.label}`);
+          if (primaryIcon) {
+            primaryIcon.className = `bi ${enabled ? 'bi-volume-up' : 'bi-volume-mute'}`;
+          }
+          if (primaryLabel) {
+            primaryLabel.textContent = `Audio ch${currentStream.stream_id}`;
+          }
+          const splitToggle = primaryButton.nextElementSibling;
+          if (splitToggle) {
+            splitToggle.classList.toggle('btn-primary', enabled);
+            splitToggle.classList.toggle('btn-secondary', !enabled);
+          }
+        }
+
+        document.querySelectorAll('[data-audio-stream-target]').forEach((button) => {
+          if (button.id === 'cb-audio-btn') {
+            return;
+          }
+          const streamName = button.getAttribute('data-audio-stream-target') || '';
+          const stream = supportedStreams.find((candidate) => candidate.name === streamName);
+          if (!stream) {
+            return;
+          }
+          const enabled = Boolean(stream.audio_enabled);
+          button.setAttribute('data-async-payload', JSON.stringify(buildAudioPayload(stream.name, !enabled)));
+          button.classList.toggle('active', enabled);
+          button.setAttribute('title', `Toggle audio for ${stream.label}`);
+          const icon = button.querySelector('i');
+          if (icon) {
+            icon.className = `bi ${enabled ? 'bi-volume-up' : 'bi-volume-mute'}`;
+          }
+        });
+      }
+
       function updateSupportedConfig(camera) {
         const assignments = {
           image_brightness: camera.native_image_brightness,
@@ -1184,6 +1000,11 @@
           cbMotion.classList.toggle('btn-primary', active);
           cbMotion.classList.toggle('btn-secondary', !active);
           cbMotion.setAttribute('aria-pressed', active ? 'true' : 'false');
+          const splitToggle = cbMotion.parentElement ? cbMotion.parentElement.querySelector('.dropdown-toggle-split') : null;
+          if (splitToggle) {
+            splitToggle.classList.toggle('btn-primary', active);
+            splitToggle.classList.toggle('btn-secondary', !active);
+          }
         }
         const imageHflip = document.getElementById('image_hflip');
         if (imageHflip) {
@@ -1253,6 +1074,7 @@
               osdUsertextEnabledElement.checked = Boolean(stream.osd_usertext_enabled);
             }
           });
+          updateAudioControls(camera);
         }
 
         if (Array.isArray(camera.native_send2_services)) {

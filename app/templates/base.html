@@ -55,5 +55,115 @@
   {% block content %}{% endblock %}
 </main>
 <script src="{{ url_for('static', filename='vendor/bootstrap-5.3.8.bundle.min.js') }}"></script>
+<script>
+  (() => {
+    function hasNavigatorClipboard() {
+      return window.isSecureContext && navigator.clipboard && typeof navigator.clipboard.writeText === 'function';
+    }
+
+    function fallbackClipboardCopy(text) {
+      return new Promise((resolve, reject) => {
+        const value = String(text || '');
+        if (!value) {
+          reject(new Error('clipboard-empty'));
+          return;
+        }
+        const textarea = document.createElement('textarea');
+        textarea.value = value;
+        textarea.setAttribute('readonly', 'readonly');
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        textarea.style.pointerEvents = 'none';
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        try {
+          if (!document.execCommand('copy')) {
+            reject(new Error('clipboard-fallback'));
+            return;
+          }
+          resolve();
+        } catch (error) {
+          reject(error);
+        } finally {
+          document.body.removeChild(textarea);
+        }
+      });
+    }
+
+    async function copyTextToClipboard(text) {
+      const value = String(text || '');
+      if (!value) {
+        return Promise.reject(new Error('clipboard-empty'));
+      }
+      if (hasNavigatorClipboard()) {
+        try {
+          await navigator.clipboard.writeText(value);
+          return;
+        } catch (_error) {
+          // Fall through to the legacy copy path.
+        }
+      }
+      return fallbackClipboardCopy(value);
+    }
+
+    function markCopied(target) {
+      if (!target) {
+        return;
+      }
+      target.classList.add('cb-copied');
+      window.setTimeout(() => {
+        target.classList.remove('cb-copied');
+      }, 900);
+    }
+
+    function initCopyToClipboard() {
+      document.querySelectorAll('.cb').forEach((element) => {
+        element.title = 'Click to copy to clipboard';
+        if (!element.hasAttribute('tabindex')) {
+          element.setAttribute('tabindex', '0');
+        }
+        if (!element.hasAttribute('role')) {
+          element.setAttribute('role', 'button');
+        }
+
+        const copyFromElement = () => {
+          const text = element.getAttribute('data-copy-text') || element.textContent || '';
+          if (!text) {
+            return;
+          }
+          if (typeof element.animate === 'function') {
+            element.animate([{ backgroundColor: 'rgba(255, 136, 0, 0.22)' }, { backgroundColor: 'transparent' }], 250);
+          }
+          copyTextToClipboard(text).then(() => {
+            markCopied(element);
+          }).catch((error) => {
+            if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+              console.warn('Clipboard copy failed', error);
+            }
+          });
+        };
+
+        element.addEventListener('click', (event) => {
+          event.preventDefault();
+          copyFromElement();
+        });
+        element.addEventListener('keydown', (event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            copyFromElement();
+          }
+        });
+      });
+    }
+
+    window.thinginoClipboard = window.thinginoClipboard || {};
+    window.thinginoClipboard.copy = copyTextToClipboard;
+    window.thinginoClipboard.fallbackCopy = fallbackClipboardCopy;
+    window.thinginoClipboard.canUseNavigator = hasNavigatorClipboard;
+
+    initCopyToClipboard();
+  })();
+</script>
 </body>
 </html>

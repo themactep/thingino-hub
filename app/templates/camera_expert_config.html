@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block content %}
+  {% set page_key = 'expert' %}
+  {% set page_label = 'Expert Config' %}
+  {% set page_meta = camera.camera_id ~ ((' / ' ~ camera.ip) if camera.ip else '') ~ ((' / ' ~ camera.status) if camera.status else '') %}
+  {% include '_camera_page_header.html' %}
+
+  <section class="card shadow-sm border-danger-subtle">
+    <div class="card-body">
+      <h2 class="card-title h4">Native API Config Patch</h2>
+      <p class="text-body-secondary">Use this page for low-level payloads that do not belong in the standard camera UI. Supported long-term settings should stay on the main Settings page.</p>
+      <div class="alert alert-warning" role="alert">
+        Expert-only tool. This sends a raw JSON object to the camera via PATCH /config and can bypass the safer guided controls.
+      </div>
+      <form action="{{ url_for('patch_config', camera_id=camera.camera_id) }}" method="post" class="mb-0">
+        <input type="hidden" name="redirect_page" value="expert">
+        <div class="mb-3">
+          <label class="form-label" for="config_patch">JSON payload</label>
+          <textarea class="form-control font-monospace" id="config_patch" name="config_patch" rows="20" spellcheck="false">{{ camera.config_patch_example }}</textarea>
+        </div>
+        <div class="d-flex flex-wrap gap-2">
+          <button class="btn btn-danger" type="submit">Apply Native Config Patch</button>
+        </div>
+      </form>
+    </div>
+  </section>
+{% endblock %}

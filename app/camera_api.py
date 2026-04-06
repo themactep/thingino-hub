@@ -2,6 +2,7 @@ import json
 import mimetypes
 import ssl
 import socket
+import http.client
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -13,6 +14,8 @@ class CameraApiError(RuntimeError):
 
 
 class CameraApiClient:
+    _MAX_READ_ATTEMPTS = 3
+
     def __init__(self, base_url: str, token: str = "", timeout: int = 5) -> None:
         self.base_url = base_url.rstrip("/")
         self.token = token
@@ -97,17 +100,34 @@ class CameraApiClient:
 
     def patch_setting(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         normalized = path.strip("/")
-        return self._json_request("PATCH", f"/settings/{normalized}", payload=payload, timeout=self._control_timeout())
+        body, _headers = self._request(
+            "PATCH",
+            f"/settings/{normalized}",
+            payload=payload,
+            accept="application/json",
+            timeout=self._control_timeout(),
+        )
+        if not body.strip():
+            return {"status": "accepted"}
+        try:
+            decoded = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise CameraApiError(f"Invalid JSON response for /settings/{normalized}: {error}") from error
+        if not isinstance(decoded, dict):
+            raise CameraApiError(f"Unexpected JSON response for /settings/{normalized}")
+        return decoded
 
     def post_action(self, path: str, payload: dict[str, Any] | None = None, timeout: int | None = None) -> dict[str, Any]:
         normalized = path.strip("/")
         return self._json_request("POST", f"/actions/{normalized}", payload=payload, timeout=timeout or self._control_timeout())
 
     def probe(self) -> dict[str, Any]:
+        # /state can be slow on loaded cameras; use the control timeout.
+        t = self._control_timeout()
         return {
-            "device": self.get_device(),
-            "capabilities": self.get_capabilities(),
-            "state": self.get_state(),
+            "device": self._json_request("GET", "/device", timeout=t),
+            "capabilities": self._json_request("GET", "/capabilities", timeout=t),
+            "state": self._json_request("GET", "/state", timeout=t),
         }
 
     def stream_events(self) -> Any:
@@ -199,8 +219,13 @@ class CameraApiClient:
             open_kwargs: dict[str, Any] = {"timeout": self.timeout if timeout is None else timeout}
             if urllib.parse.urlsplit(url).scheme == "https":
                 open_kwargs["context"] = ssl._create_unverified_context()
-            with urllib.request.urlopen(request, **open_kwargs) as response:
-                return response.read(), response.headers
+            for attempt in range(self._MAX_READ_ATTEMPTS):
+                try:
+                    with urllib.request.urlopen(request, **open_kwargs) as response:
+                        return response.read(), response.headers
+                except http.client.IncompleteRead as error:
+                    if attempt + 1 >= self._MAX_READ_ATTEMPTS:
+                        raise CameraApiError(f"{method} {path} failed: {error}") from error
         except urllib.error.HTTPError as error:
             body = error.read().decode("utf-8", errors="replace").strip()
             detail = body or error.reason or f"HTTP {error.code}"

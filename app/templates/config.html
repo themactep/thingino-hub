@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
+
   <section class="card shadow-sm">
     <div class="card-body">
       <h2 class="h4">Configuration</h2>
@@ -93,6 +94,14 @@
               <input class="form-control" type="password" name="ui_password" value="{{ config.ui.password }}">
             </div>
             <div class="col-12 col-md-2">
+              <label class="form-label">User competency</label>
+              <select class="form-select" name="ui_competency_level">
+                {% for level in ['basic', 'advanced', 'expert'] %}
+                <option value="{{ level }}" {% if (config.ui.competency_level or 'basic') == level %}selected{% endif %}>{{ level|capitalize }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-12 col-md-2">
               <label class="form-label">Registration stale timeout (seconds)</label>
               <input class="form-control" type="number" min="0" name="ui_registration_stale_after_seconds" value="{{ config.ui.registration_stale_after_seconds }}">
             </div>
@@ -109,7 +118,7 @@
               <input class="form-control" type="number" min="0" name="ui_snapshot_cache_stale_after_seconds" value="{{ config.ui.snapshot_cache_stale_after_seconds }}">
             </div>
           </div>
-          <p class="small text-body-secondary mt-2">If both auth fields are set, the web UI uses HTTP Basic Auth. Registration staleness is optional fallback logic for retained MQTT registrations. Snapshot heartbeat actively refreshes each camera preview into the local cache and updates the dashboard badge without removing the camera from the roster. When the camera goes offline, recent cached previews remain visible with a muted treatment until the cached snapshot age exceeds the stale threshold, after which the placeholder is shown instead. Set the heartbeat interval to 0 to disable background refresh. Environment variables <code>HUB_UI_USERNAME</code> and <code>HUB_UI_PASSWORD</code> still override the auth values when present.</p>
+          <p class="small text-body-secondary mt-2">If both auth fields are set, the web UI uses HTTP Basic Auth. User competency controls whether expert-only pages, including the raw native config patch editor, appear in the interface. Registration staleness is optional fallback logic for retained MQTT registrations. Snapshot heartbeat actively refreshes each camera preview into the local cache and updates the dashboard badge without removing the camera from the roster. When the camera goes offline, recent cached previews remain visible with a muted treatment until the cached snapshot age exceeds the stale threshold, after which the placeholder is shown instead. Set the heartbeat interval to 0 to disable background refresh. Environment variables <code>HUB_UI_USERNAME</code> and <code>HUB_UI_PASSWORD</code> still override the auth values when present.</p>
         </section>
 
         <section class="mb-4">

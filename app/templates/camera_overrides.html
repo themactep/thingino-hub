@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block content %}
+  {% set page_key = 'overrides' %}
+  {% set page_label = 'Overrides' %}
+  {% set page_meta = camera.camera_id ~ ((' / ' ~ camera.ip) if camera.ip else '') ~ ((' / ' ~ camera.status) if camera.status else '') %}
+  {% include '_camera_page_header.html' %}
+
+  <section class="card shadow-sm">
+    <div class="card-body">
+      <h2 class="card-title h4">Camera Overrides</h2>
+      <p>These values are stored in the hub YAML and override or supplement auto-registered metadata for this camera.</p>
+      <p class="small text-body-secondary">Deleting a camera removes saved overrides, drops it from the current roster, and tries to clear the retained MQTT registration. A live camera can still re-register itself later.</p>
+      <div class="row g-4">
+        <div class="col-12 col-lg-4">
+          <form action="{{ url_for('camera_overrides', camera_id=camera.camera_id) }}" method="post" class="border rounded p-3 h-100">
+            <h3 class="h6 mb-3">General Overrides</h3>
+            <div class="row g-3">
+              <div class="col-12">
+                <label class="form-label" for="override_name">Display name</label>
+                <input class="form-control" id="override_name" type="text" name="name" value="{{ camera.override_name }}">
+              </div>
+              <div class="col-12">
+                <label class="form-label" for="override_ip">IP override</label>
+                <input class="form-control" id="override_ip" type="text" name="ip" value="{{ camera.override_ip }}">
+              </div>
+              <div class="col-12">
+                <label class="form-label" for="override_snapshot_url">Snapshot URL override</label>
+                <input class="form-control" id="override_snapshot_url" type="text" name="snapshot_url" value="{{ camera.override_snapshot_url }}">
+              </div>
+            </div>
+            <button class="btn btn-primary mt-3" type="submit">Save General Overrides</button>
+          </form>
+        </div>
+        <div class="col-12 col-lg-4">
+          <form action="{{ url_for('camera_overrides', camera_id=camera.camera_id) }}" method="post" class="border rounded p-3 h-100">
+            <h3 class="h6 mb-3">Native API Overrides</h3>
+            <div class="row g-3">
+              <div class="col-12">
+                <label class="form-label" for="override_api_base_url">Native API base URL override</label>
+                <input class="form-control" id="override_api_base_url" type="text" name="api_base_url" value="{{ camera.override_api_base_url }}">
+              </div>
+              <div class="col-12">
+                <label class="form-label" for="override_api_key">API key override</label>
+                <input class="form-control" id="override_api_key" type="password" name="api_key" value="{{ camera.override_api_key }}" autocomplete="off">
+              </div>
+              <div class="col-12">
+                <label class="form-label" for="override_api_token">Native API bearer token</label>
+                <input class="form-control" id="override_api_token" type="password" name="api_token" value="{{ camera.override_api_token }}" autocomplete="off">
+              </div>
+            </div>
+            <button class="btn btn-primary mt-3" type="submit">Save Native API Overrides</button>
+          </form>
+        </div>
+        <div class="col-12 col-lg-4">
+          <form action="{{ url_for('camera_overrides', camera_id=camera.camera_id) }}" method="post" class="border rounded p-3 h-100">
+            <h3 class="h6 mb-3">ONVIF Overrides</h3>
+            <div class="row g-3">
+              <div class="col-12">
+                <label class="form-label" for="override_onvif_endpoint">ONVIF endpoint override</label>
+                <input class="form-control" id="override_onvif_endpoint" type="text" name="onvif_endpoint" value="{{ camera.override_onvif_endpoint }}">
+              </div>
+              <div class="col-12">
+                <label class="form-label" for="override_onvif_username">ONVIF username</label>
+                <input class="form-control" id="override_onvif_username" type="text" name="onvif_username" value="{{ camera.override_onvif_username }}" autocomplete="off">
+              </div>
+              <div class="col-12">
+                <label class="form-label" for="override_onvif_password">ONVIF password</label>
+                <input class="form-control" id="override_onvif_password" type="password" name="onvif_password" value="{{ camera.override_onvif_password }}" autocomplete="off">
+              </div>
+            </div>
+            <button class="btn btn-primary mt-3" type="submit">Save ONVIF Overrides</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </section>
+{% endblock %}

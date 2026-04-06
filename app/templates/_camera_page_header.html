@@ -1,0 +1,132 @@
+<section class="mb-4">
+  <div class="d-flex flex-column flex-lg-row justify-content-between align-items-lg-end gap-3">
+    <div>
+      <p class="text-body-secondary text-uppercase small fw-semibold mb-1">{{ page_label }}</p>
+      <h1 class="h3 mb-1">{{ camera.name }}</h1>
+      <p class="text-body-secondary mb-0">{{ page_meta }}</p>
+    </div>
+    <div class="d-flex flex-wrap gap-2 align-self-start">
+    {% if camera.web_ui_url %}
+      <a class="btn btn-outline-secondary" href="{{ camera.web_ui_url }}" target="_blank" rel="noreferrer">Camera Web UI</a>
+    {% endif %}
+      <a class="btn btn-outline-secondary" href="{{ url_for('dashboard') }}">Back to Dashboard</a>
+    </div>
+  </div>
+
+  <nav class="nav nav-pills gap-2 mt-3" aria-label="Camera page navigation">
+    <a class="btn btn-sm {{ 'btn-primary' if page_key == 'detail' else 'btn-outline-secondary' }}" href="{{ url_for('camera_detail', camera_id=camera.camera_id) }}">Camera</a>
+    <a class="btn btn-sm {{ 'btn-primary' if page_key == 'info' else 'btn-outline-secondary' }}" href="{{ url_for('camera_info', camera_id=camera.camera_id) }}">Info &amp; ONVIF</a>
+    <a class="btn btn-sm {{ 'btn-primary' if page_key == 'settings' else 'btn-outline-secondary' }}" href="{{ url_for('camera_settings', camera_id=camera.camera_id) }}">Settings</a>
+    <a class="btn btn-sm {{ 'btn-primary' if page_key == 'send2' else 'btn-outline-secondary' }}" href="{{ url_for('camera_send2', camera_id=camera.camera_id) }}">Send2</a>
+  {% if ui_has_advanced_access %}
+    <a class="btn btn-sm {{ 'btn-primary' if page_key == 'overrides' else 'btn-outline-secondary' }}" href="{{ url_for('camera_overrides', camera_id=camera.camera_id) }}">Overrides</a>
+    <a class="btn btn-sm {{ 'btn-primary' if page_key == 'native-actions' else 'btn-outline-secondary' }}" href="{{ url_for('camera_native_actions', camera_id=camera.camera_id) }}">Native Actions</a>
+  {% endif %}
+    <a class="btn btn-sm {{ 'btn-primary' if page_key == 'history' else 'btn-outline-secondary' }}" href="{{ url_for('camera_history', camera_id=camera.camera_id) }}">History</a>
+  {% if ui_has_expert_access %}
+    <a class="btn btn-sm {{ 'btn-danger' if page_key == 'expert' else 'btn-outline-danger' }}" href="{{ url_for('camera_expert_config', camera_id=camera.camera_id) }}">Expert Config</a>
+  {% endif %}
+  </nav>
+
+  {% set setup_status = camera.setup_status if camera.setup_status is defined else ('paired' if camera.is_paired else ('unavailable' if not camera.present_on_mqtt_broker else ('verifying' if camera.mqtt_command_status == 'unknown' else ('unavailable' if not camera.has_agent else ('connect' if not camera.registered_on_hub else 'pair'))))) %}
+  {% set present_on_mqtt_broker = camera.present_on_mqtt_broker if camera.present_on_mqtt_broker is defined else true %}
+  {% set is_paired = camera.is_paired if camera.is_paired is defined else false %}
+  {% set registered_on_hub = camera.registered_on_hub if camera.registered_on_hub is defined else (camera.hub_connected or is_paired) %}
+  {% set has_agent = camera.has_agent if camera.has_agent is defined else (is_paired or camera.mqtt_command_status == 'online') %}
+  <div class="card mt-3 shadow-sm">
+    <div class="card-body py-3">
+      <div class="d-flex flex-column flex-md-row justify-content-between gap-2 mb-2">
+        <div class="fw-semibold">Setup Ladder</div>
+        <div class="small text-body-secondary">One state source: broker presence, agent capability, hub registration, pairing.</div>
+      </div>
+      <div class="row g-2 small">
+        <div class="col-6 col-xl-3">
+          <div class="border rounded p-2 h-100">
+            <div class="text-body-secondary text-uppercase small">1. MQTT Broker</div>
+            <div class="fw-semibold {{ 'text-success' if present_on_mqtt_broker else 'text-danger' }}">{{ 'present' if present_on_mqtt_broker else 'missing' }}</div>
+          </div>
+        </div>
+        <div class="col-6 col-xl-3">
+          <div class="border rounded p-2 h-100">
+            <div class="text-body-secondary text-uppercase small">2. Has Agent</div>
+            <div class="fw-semibold {{ 'text-success' if has_agent else ('text-body-secondary' if mqtt_command_status == 'unknown' else 'text-danger') }}">{{ 'yes' if has_agent else ('verifying' if mqtt_command_status == 'unknown' else 'no') }}</div>
+          </div>
+        </div>
+        <div class="col-6 col-xl-3">
+          <div class="border rounded p-2 h-100">
+            <div class="text-body-secondary text-uppercase small">3. Hub Registered</div>
+            <div class="fw-semibold {{ 'text-success' if registered_on_hub else 'text-danger' }}">{{ 'yes' if registered_on_hub else 'no' }}</div>
+          </div>
+        </div>
+        <div class="col-6 col-xl-3">
+          <div class="border rounded p-2 h-100">
+            <div class="text-body-secondary text-uppercase small">4. Paired</div>
+            <div class="fw-semibold {{ 'text-success' if is_paired else 'text-danger' }}">{{ 'yes' if is_paired else 'no' }}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% if setup_status != 'paired' %}
+  {% set mqtt_command_status = camera.mqtt_command_status if camera.mqtt_command_status is defined else 'online' %}
+  {% set mqtt_command_last_error = camera.mqtt_command_last_error if camera.mqtt_command_last_error is defined else '' %}
+  {% if setup_status == 'unavailable' %}
+  <div class="alert alert-warning mt-3 shadow-sm" role="alert">
+    <div class="fw-semibold mb-1">Automatic setup is unavailable for this camera.</div>
+    <div class="small">It published a registration but did not answer the hub MQTT command probe, so it looks like legacy registration only and not an agent-capable camera.</div>
+  {% if mqtt_command_last_error %}
+    <div class="small mt-2 text-body-secondary">Last probe result: {{ mqtt_command_last_error }}</div>
+  {% endif %}
+  </div>
+  {% else %}
+  <div class="card border-warning-subtle bg-warning-subtle mt-3 shadow-sm">
+    <div class="card-body">
+      <div class="d-flex flex-column flex-xl-row justify-content-between gap-3 mb-3">
+        <div>
+          <h2 class="h5 mb-1">Finish Camera Setup</h2>
+          {% if setup_status == 'connect' or setup_status == 'verifying' and not registered_on_hub %}
+          <p class="text-body-secondary mb-0">Step 1 of 2: connect this camera to the hub with its ONVIF credentials. After that succeeds, this page will offer the pairing step to restore full native API access.</p>
+          {% else %}
+          <p class="text-body-secondary mb-0">Step 2 of 2: hub registration already exists, but native API access is still limited. Install the pairing bundle now to restore the native listener and unlock full camera controls.</p>
+          {% endif %}
+        </div>
+        <div class="small text-body-secondary">
+          <div>Hub registration: {{ 'present' if registered_on_hub else 'missing' }}</div>
+          <div>Pairing token: {{ 'present' if is_paired else 'missing' }}</div>
+        </div>
+      </div>
+
+      {% if setup_status == 'connect' %}
+      <form action="{{ url_for('connect_camera', camera_id=camera.camera_id) }}" method="post" class="row g-3 align-items-end mb-3">
+        <input type="hidden" name="redirect_page" value="{{ page_key }}">
+        <div class="col-12 col-md-4">
+          <label class="form-label" for="connect_onvif_username">ONVIF username</label>
+          <input class="form-control" id="connect_onvif_username" type="text" name="onvif_username" value="{{ camera.override_onvif_username or camera.default_onvif_username }}" placeholder="thingino" autocomplete="off">
+        </div>
+        <div class="col-12 col-md-4">
+          <label class="form-label" for="connect_onvif_password">ONVIF password</label>
+          <input class="form-control" id="connect_onvif_password" type="password" name="onvif_password" value="{{ camera.override_onvif_password or camera.default_onvif_password }}" placeholder="thingino" autocomplete="off">
+        </div>
+        <div class="col-12 col-md-4 d-grid">
+          <button class="btn btn-primary" type="submit">Connect to Hub</button>
+        </div>
+      </form>
+      <p class="small text-body-secondary mb-0">The pairing step stays hidden until the hub connection has been created successfully.</p>
+      {% elif setup_status == 'verifying' and not registered_on_hub %}
+      <p class="small text-body-secondary mb-0">Verifying whether this camera accepts hub MQTT commands. Setup actions stay hidden until it answers a probe.</p>
+      {% else %}
+      {% if setup_status == 'pair' %}
+      <form action="{{ url_for('pair_camera', camera_id=camera.camera_id) }}" method="post" class="d-flex flex-wrap gap-2 align-items-center">
+        <input type="hidden" name="redirect_page" value="{{ page_key }}">
+        <button class="btn btn-primary" type="submit">Install Pairing Bundle</button>
+        <span class="small text-body-secondary">Installs the pairing bundle over MQTT and asks the camera to restart its hub agent.</span>
+      </form>
+      {% elif setup_status == 'verifying' %}
+      <p class="small text-body-secondary mb-0">Waiting for MQTT command verification before exposing the pairing step.</p>
+      {% endif %}
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+  {% endif %}
+</section>

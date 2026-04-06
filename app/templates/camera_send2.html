@@ -1,0 +1,298 @@
+{% extends "base.html" %}
+{% block content %}
+  {% set page_key = 'send2' %}
+  {% set page_label = 'Send2' %}
+  {% set page_meta = camera.camera_id ~ ((' / ' ~ camera.ip) if camera.ip else '') ~ ((' / ' ~ camera.status) if camera.status else '') %}
+  {% set send2_controls_disabled = camera.api_status != 'online' or (not camera.native_send2_available and not camera.native_send2_error) %}
+  {% include '_camera_page_header.html' %}
+
+  <section class="card shadow-sm">
+    <div class="card-body">
+      <div id="send2-action-feedback" class="alert d-none" role="status" aria-live="polite"></div>
+      <h2 class="card-title h4">Send to Services</h2>
+      <p class="text-body-secondary mb-4">Configure where snapshots and video clips are delivered when motion is detected.</p>
+
+    {% if camera.identity_conflict_error %}
+      <div class="alert alert-warning" role="alert">{{ camera.identity_conflict_error }}</div>
+    {% endif %}
+
+    {% if camera.api_status != 'online' %}
+      <div class="alert alert-warning" role="alert">
+        Send2 settings are unavailable while the camera's Native API is {{ camera.api_status or 'offline' }}.
+      </div>
+    {% endif %}
+
+      <form action="{{ url_for('apply_supported_config', camera_id=camera.camera_id) }}" method="post" class="mb-0">
+        <input type="hidden" name="redirect_page" value="send2">
+        <fieldset {% if send2_controls_disabled %}disabled{% endif %}>
+          <div class="row g-3 mb-4">
+            <div class="col-12 col-lg-5">
+              <div class="card h-100" id="motion-detection-settings">
+                <div class="card-header">Motion Detection</div>
+                <div class="card-body">
+                {% if camera.native_motion_supported %}
+                  <input type="hidden" name="motion_enabled_present" value="1">
+                {% endif %}
+                  <p class="form-switch mb-3">
+                    <input class="form-check-input me-2" id="motion_enabled" type="checkbox" name="motion_enabled" {% if camera.native_motion_enabled %}checked{% endif %} {% if not camera.native_motion_supported %}disabled{% endif %}>
+                    <label class="form-check-label" for="motion_enabled">Start motion detection on boot</label>
+                  </p>
+                {% if camera.native_send2_available or camera.native_send2_error %}
+                  <p class="mb-3">
+                    <label class="form-label d-flex justify-content-between gap-3" for="send2_motion_sensitivity">
+                      <span>Sensitivity</span>
+                      <span class="text-body-secondary" id="send2_motion_sensitivity_value">{{ camera.native_send2_motion_sensitivity or '1' }}</span>
+                    </label>
+                    <input class="form-range" id="send2_motion_sensitivity" type="range" name="send2_motion_sensitivity" min="1" max="8" step="1" value="{{ camera.native_send2_motion_sensitivity or '1' }}" {% if not camera.native_send2_available %}disabled{% endif %}>
+                  </p>
+                  <p class="mb-0">
+                    <label class="form-label d-flex justify-content-between gap-3" for="send2_motion_cooldown">
+                      <span>Cooldown</span>
+                      <span class="text-body-secondary"><span id="send2_motion_cooldown_value">{{ camera.native_send2_motion_cooldown or '5' }}</span> seconds</span>
+                    </label>
+                    <input class="form-range" id="send2_motion_cooldown" type="range" name="send2_motion_cooldown" min="1" max="60" step="1" value="{{ camera.native_send2_motion_cooldown or '5' }}" {% if not camera.native_send2_available %}disabled{% endif %}>
+                  </p>
+                {% else %}
+                  <p class="text-body-secondary mb-0">Motion sensitivity and cooldown are available when camera-side send2 integration is enabled.</p>
+                {% endif %}
+                {% if camera.native_send2_error %}
+                  <div class="alert alert-warning mt-3 mb-0">Send2 motion settings are unavailable right now: {{ camera.native_send2_error }}</div>
+                {% endif %}
+                </div>
+              </div>
+            </div>
+
+            <div class="col-12 col-lg-7">
+              <div class="card h-100">
+                <div class="card-header">Available Services</div>
+                <div class="card-body">
+                {% if camera.native_send2_error %}
+                  <div class="alert alert-warning mb-0">Send2 overview is unavailable right now: {{ camera.native_send2_error }}</div>
+                {% elif camera.native_send2_services %}
+                  <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0 send2services">
+                      <thead>
+                        <tr>
+                          <th scope="col">Service</th>
+                          <th scope="col">On Motion</th>
+                          <th scope="col">Photo</th>
+                          <th scope="col">Video</th>
+                          <th scope="col">Test</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                      {% for service in camera.native_send2_services %}
+                        {% set photo_supported = service.photo_supported if service.photo_supported is defined else true %}
+                        {% set video_supported = service.video_supported if service.video_supported is defined else service.video_enabled %}
+                        {% set icon = 'bi-send' %}
+                        {% if service.name == 'email' %}
+                          {% set icon = 'bi-envelope' %}
+                        {% elif service.name == 'ftp' %}
+                          {% set icon = 'bi-hdd-network' %}
+                        {% elif service.name == 'telegram' %}
+                          {% set icon = 'bi-telegram' %}
+                        {% elif service.name == 'mqtt' %}
+                          {% set icon = 'bi-broadcast' %}
+                        {% elif service.name == 'webhook' %}
+                          {% set icon = 'bi-link-45deg' %}
+                        {% elif service.name == 'storage' %}
+                          {% set icon = 'bi-hdd' %}
+                        {% elif service.name == 'ntfy' %}
+                          {% set icon = 'bi-bell' %}
+                        {% elif service.name == 'gphotos' %}
+                          {% set icon = 'bi-google' %}
+                        {% endif %}
+                        <tr>
+                          <td>
+                            <div class="fw-semibold"><i class="bi {{ icon }} me-2"></i>{{ service.label }}</div>
+                          </td>
+                          <td>
+                            <div class="form-switch d-inline-block m-0">
+                              <input type="hidden" name="motion_send2{{ service.name }}_present" value="1">
+                              <input class="form-check-input" type="checkbox" id="motion_send2{{ service.name }}" name="motion_send2{{ service.name }}" {% if service.motion_enabled %}checked{% endif %} {% if send2_controls_disabled or not camera.native_send2_available %}disabled{% endif %}>
+                            </div>
+                          </td>
+                          <td>
+                          {% if photo_supported %}
+                            <div class="form-switch d-inline-block m-0">
+                              <input type="hidden" name="send2{{ service.name }}_photo_present" value="1">
+                              <input class="form-check-input" type="checkbox" id="send2{{ service.name }}_photo" name="send2{{ service.name }}_photo" {% if service.photo_enabled %}checked{% endif %} {% if send2_controls_disabled or not camera.native_send2_available %}disabled{% endif %}>
+                            </div>
+                          {% else %}
+                            <span class="badge text-bg-secondary">N/A</span>
+                          {% endif %}
+                          </td>
+                          <td>
+                          {% if video_supported %}
+                            <div class="form-switch d-inline-block m-0">
+                              <input type="hidden" name="send2{{ service.name }}_video_present" value="1">
+                              <input class="form-check-input" type="checkbox" id="send2{{ service.name }}_video" name="send2{{ service.name }}_video" {% if service.video_enabled %}checked{% endif %} {% if send2_controls_disabled or not camera.native_send2_available %}disabled{% endif %}>
+                            </div>
+                          {% else %}
+                            <span class="badge text-bg-secondary">N/A</span>
+                          {% endif %}
+                          </td>
+                          <td>
+                            <div class="d-flex flex-wrap gap-2">
+                            {% if photo_supported %}
+                              <button type="button" class="btn btn-outline-secondary btn-sm" data-send2-test-action="{{ url_for('send2_test', camera_id=camera.camera_id, service_name=service.name) }}?redirect_page=send2" data-send2-service-label="{{ service.label }} photo" data-send2-type="photo" {% if send2_controls_disabled or not camera.native_send2_available or not service.photo_enabled %}disabled{% endif %}>Test photo</button>
+                            {% endif %}
+                            {% if video_supported %}
+                              <button type="button" class="btn btn-outline-secondary btn-sm" data-send2-test-action="{{ url_for('send2_test', camera_id=camera.camera_id, service_name=service.name) }}?redirect_page=send2" data-send2-service-label="{{ service.label }} video" data-send2-type="video" {% if send2_controls_disabled or not camera.native_send2_available or not service.video_enabled %}disabled{% endif %}>Test video</button>
+                            {% endif %}
+                            {% if not photo_supported and not video_supported %}
+                              <button type="button" class="btn btn-outline-secondary btn-sm" disabled>Test</button>
+                            {% endif %}
+                            </div>
+                          </td>
+                        </tr>
+                      {% endfor %}
+                      </tbody>
+                    </table>
+                  </div>
+                {% else %}
+                  <p class="text-body-secondary mb-0">No send2 services are available for this camera right now.</p>
+                {% endif %}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="d-flex flex-wrap gap-2 mb-4">
+            <button class="btn btn-primary" type="submit">Save Motion &amp; Send2 Settings</button>
+          </div>
+        </fieldset>
+      </form>
+
+      <div class="card border-0 bg-body-tertiary">
+        <div class="card-body">
+          <h2 class="h4">Send2 Test Output</h2>
+          <p class="text-body-secondary">Last on-demand send2 test launched from the hub. Verbose output is requested so script failures are visible without opening the camera UI.</p>
+          <pre class="form-control font-monospace mb-0" id="send2-test-output" style="min-height: 10rem; white-space: pre-wrap;">No send2 test has been run from the hub yet.</pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <script>
+    (() => {
+      const output = document.getElementById('send2-test-output');
+      const feedback = document.getElementById('send2-action-feedback');
+      const motionSensitivity = document.getElementById('send2_motion_sensitivity');
+      const motionSensitivityValue = document.getElementById('send2_motion_sensitivity_value');
+      const motionCooldown = document.getElementById('send2_motion_cooldown');
+      const motionCooldownValue = document.getElementById('send2_motion_cooldown_value');
+      let feedbackTimer = null;
+
+      function syncRangeValue(input, outputNode) {
+        if (!input || !outputNode) {
+          return;
+        }
+        const render = () => {
+          outputNode.textContent = String(input.value || '');
+        };
+        render();
+        input.addEventListener('input', render);
+      }
+
+      function decodeBase64String(value) {
+        try {
+          return window.atob(String(value || ''));
+        } catch (_error) {
+          return '';
+        }
+      }
+
+      function stripAnsi(value) {
+        return String(value || '').replace(/\u001b\[[0-9;]*[A-Za-z]/g, '');
+      }
+
+      function showFeedback(message, category) {
+        if (!feedback) {
+          return;
+        }
+        if (feedbackTimer !== null) {
+          window.clearTimeout(feedbackTimer);
+        }
+        feedback.textContent = message;
+        feedback.className = `alert ${category === 'success' ? 'alert-success' : 'alert-danger'}`;
+        feedback.classList.remove('d-none');
+        feedbackTimer = window.setTimeout(() => {
+          feedback.classList.add('d-none');
+          feedbackTimer = null;
+        }, 3200);
+      }
+
+      function renderSend2TestResult(payload, serviceLabel = '') {
+        if (!output) {
+          return;
+        }
+
+        let text = '';
+        if (!payload) {
+          text = 'No response received.';
+        } else if (payload.error) {
+          text = `Error: ${payload.error.message || payload.error.code || payload.error}`;
+        } else if (payload.message && typeof payload.message === 'object') {
+          if (payload.message.output_b64) {
+            text = stripAnsi(decodeBase64String(payload.message.output_b64));
+          } else {
+            text = stripAnsi(payload.message.output || JSON.stringify(payload.message, null, 2));
+          }
+          if (payload.message.status && payload.message.status !== 'success') {
+            text = `[${payload.message.status}] ${text}`;
+          }
+        } else if (typeof payload.message === 'string') {
+          text = stripAnsi(payload.message);
+        } else {
+          text = stripAnsi(JSON.stringify(payload, null, 2));
+        }
+
+        output.textContent = serviceLabel ? `${serviceLabel}\n\n${text || '(no output)'}` : (text || '(no output)');
+      }
+
+      async function submitSend2Test(button) {
+        button.disabled = true;
+        const serviceLabel = button.getAttribute('data-send2-service-label') || 'Send2 test';
+        const sendType = button.getAttribute('data-send2-type') || '';
+        if (output) {
+          output.textContent = `${serviceLabel}\n\nRunning...`;
+        }
+
+        try {
+          const formData = new FormData();
+          formData.set('verbose', '1');
+          if (sendType) {
+            formData.set('type', sendType);
+          }
+          const response = await fetch(button.getAttribute('data-send2-test-action'), {
+            method: 'POST',
+            body: formData,
+            headers: {
+              Accept: 'application/json',
+              'X-Requested-With': 'fetch',
+            },
+          });
+          const payload = await response.json();
+          showFeedback(payload.message || 'Send2 test finished.', payload.category || (response.ok ? 'success' : 'error'));
+          renderSend2TestResult(payload.send2_test || payload, serviceLabel);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Send2 test failed.';
+          showFeedback(message, 'error');
+          renderSend2TestResult({ error: { message } }, serviceLabel);
+        } finally {
+          button.disabled = false;
+        }
+      }
+
+      document.querySelectorAll('[data-send2-test-action]').forEach((button) => {
+        button.addEventListener('click', () => {
+          submitSend2Test(button);
+        });
+      });
+
+      syncRangeValue(motionSensitivity, motionSensitivityValue);
+      syncRangeValue(motionCooldown, motionCooldownValue);
+    })();
+  </script>
+{% endblock %}

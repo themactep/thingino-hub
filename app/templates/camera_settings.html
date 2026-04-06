@@ -1,0 +1,284 @@
+{% extends "base.html" %}
+{% block content %}
+  {% set page_key = 'settings' %}
+  {% set page_label = 'Settings' %}
+  {% set page_meta = camera.camera_id ~ ((' / ' ~ camera.ip) if camera.ip else '') ~ ((' / ' ~ camera.status) if camera.status else '') %}
+  {% include '_camera_page_header.html' %}
+
+  <section class="card shadow-sm">
+    <div class="card-body">
+      <h2 class="card-title h4">Long-Term Camera Settings</h2>
+      <p class="text-body-secondary">Persistent imaging, day/night, and stream configuration lives here so the main camera page stays focused on preview and short-lived actions. Motion detection and notification routing now live on the Send2 page.</p>
+    {% if camera.identity_conflict_error %}
+      <div class="alert alert-warning" role="alert">{{ camera.identity_conflict_error }}</div>
+    {% endif %}
+    {% if camera.native_controls_error %}
+      <div class="alert alert-warning" role="alert">Could not load live camera config: {{ camera.native_controls_error }}</div>
+    {% endif %}
+      <form action="{{ url_for('apply_supported_config', camera_id=camera.camera_id) }}" method="post" class="mb-0">
+        <input type="hidden" name="redirect_page" value="settings">
+        <fieldset {% if not camera.native_controls_available and not camera.native_send2_available %}disabled{% endif %}>
+          <div class="row g-4 mb-4">
+            <div class="col-12 col-xl-4">
+              <div class="border rounded p-3 h-100">
+                <h3 class="h6 mb-3">Imaging</h3>
+                <div class="mb-3">
+                  <label class="form-label" for="image_anti_flicker">Anti-flicker mode</label>
+                  <select class="form-select" id="image_anti_flicker" name="image_anti_flicker" {% if not camera.native_image_anti_flicker_supported %}disabled{% endif %}>
+                    {% for anti_flicker_mode in ['off', '50hz', '60hz'] %}
+                    <option value="{{ anti_flicker_mode }}" {% if (camera.native_image_anti_flicker or 'off')|lower == anti_flicker_mode %}selected{% endif %}>{{ anti_flicker_mode|upper if anti_flicker_mode != 'off' else 'Off' }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+                <div>
+                  <div class="form-label mb-2">Flip</div>
+                {% if camera.native_image_hflip_supported %}
+                  <input type="hidden" name="image_hflip_present" value="1">
+                {% endif %}
+                  <div class="form-check form-switch mb-2">
+                    <input class="form-check-input" id="image_hflip" type="checkbox" name="image_hflip" {% if camera.native_image_hflip %}checked{% endif %} {% if not camera.native_image_hflip_supported %}disabled{% endif %}>
+                    <label class="form-check-label" for="image_hflip">Horizontal flip</label>
+                  </div>
+                {% if camera.native_image_vflip_supported %}
+                  <input type="hidden" name="image_vflip_present" value="1">
+                {% endif %}
+                  <div class="form-check form-switch">
+                    <input class="form-check-input" id="image_vflip" type="checkbox" name="image_vflip" {% if camera.native_image_vflip %}checked{% endif %} {% if not camera.native_image_vflip_supported %}disabled{% endif %}>
+                    <label class="form-check-label" for="image_vflip">Vertical flip</label>
+                  </div>
+                </div>
+                <div class="row g-3 mt-1">
+                  <div class="col-12 col-sm-6">
+                    <label class="form-label" for="image_brightness">Brightness</label>
+                    <input class="form-control" id="image_brightness" type="number" name="image_brightness" min="0" max="255" value="{{ camera.native_image_brightness }}" {% if not camera.native_image_controls_supported %}disabled{% endif %}>
+                  </div>
+                  <div class="col-12 col-sm-6">
+                    <label class="form-label" for="image_contrast">Contrast</label>
+                    <input class="form-control" id="image_contrast" type="number" name="image_contrast" min="0" max="255" value="{{ camera.native_image_contrast }}" {% if not camera.native_image_controls_supported %}disabled{% endif %}>
+                  </div>
+                  <div class="col-12 col-sm-6">
+                    <label class="form-label" for="image_saturation">Saturation</label>
+                    <input class="form-control" id="image_saturation" type="number" name="image_saturation" min="0" max="255" value="{{ camera.native_image_saturation }}" {% if not camera.native_image_controls_supported %}disabled{% endif %}>
+                  </div>
+                  <div class="col-12 col-sm-6">
+                    <label class="form-label" for="image_sharpness">Sharpness</label>
+                    <input class="form-control" id="image_sharpness" type="number" name="image_sharpness" min="0" max="255" value="{{ camera.native_image_sharpness }}" {% if not camera.native_image_controls_supported %}disabled{% endif %}>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="col-12 col-xl-4">
+              <div class="border rounded p-3 h-100" id="daynight-settings">
+                <h3 class="h6 mb-3">Day/Night</h3>
+              {% if camera.native_daynight_supported or camera.native_daynight_action_supported %}
+                <input type="hidden" name="daynight_enabled_present" value="1">
+              {% endif %}
+                <div class="form-check form-switch mb-3">
+                  <input class="form-check-input" id="daynight_enabled" type="checkbox" name="daynight_enabled" {% if camera.native_daynight_enabled %}checked{% endif %} {% if not camera.native_daynight_supported and not camera.native_daynight_action_supported %}disabled{% endif %}>
+                  <label class="form-check-label" for="daynight_enabled">Automatic switching enabled</label>
+                </div>
+                <div class="mb-3">
+                  <label class="form-label" for="daynight_force_mode">Preferred mode</label>
+                  <select class="form-select" id="daynight_force_mode" name="daynight_force_mode" {% if not camera.native_daynight_supported and not camera.native_daynight_action_supported %}disabled{% endif %}>
+                    <option value="" {% if not camera.native_daynight_force_mode %}selected{% endif %}>Auto</option>
+                    <option value="day" {% if camera.native_daynight_force_mode == 'day' %}selected{% endif %}>Day</option>
+                    <option value="night" {% if camera.native_daynight_force_mode == 'night' %}selected{% endif %}>Night</option>
+                  </select>
+                </div>
+                <div class="row g-3 mb-3">
+                  <div class="col-12 col-md-6">
+                    <label class="form-label" for="daynight_total_gain_night_threshold">Switch to night mode above</label>
+                    <input class="form-control" id="daynight_total_gain_night_threshold" type="number" name="daynight_total_gain_night_threshold" min="0" max="40000" value="{{ camera.native_daynight_total_gain_night_threshold }}" {% if not camera.native_daynight_supported %}disabled{% endif %}>
+                  </div>
+                  <div class="col-12 col-md-6">
+                    <label class="form-label" for="daynight_total_gain_day_threshold">Switch to day mode below</label>
+                    <input class="form-control" id="daynight_total_gain_day_threshold" type="number" name="daynight_total_gain_day_threshold" min="0" max="40000" value="{{ camera.native_daynight_total_gain_day_threshold }}" {% if not camera.native_daynight_supported %}disabled{% endif %}>
+                  </div>
+                </div>
+                <div class="mb-3">
+                  <div class="form-label mb-2">Controls</div>
+                  <div class="row g-2">
+                  {% for field, label in [('color', 'Change color mode'), ('ircut', 'Flip IR cut filter'), ('ir850', 'Toggle IR 850 nm'), ('ir940', 'Toggle IR 940 nm'), ('white', 'Toggle white light')] %}
+                    <div class="col-12 col-md-6">
+                      <input type="hidden" name="daynight_controls_{{ field }}_present" value="1">
+                      <div class="form-check form-switch">
+                        <input class="form-check-input" id="daynight_controls_{{ field }}" type="checkbox" name="daynight_controls_{{ field }}" {% if camera['native_daynight_controls_' ~ field] %}checked{% endif %} {% if not camera.native_daynight_supported %}disabled{% endif %}>
+                        <label class="form-check-label" for="daynight_controls_{{ field }}">{{ label }}</label>
+                      </div>
+                    </div>
+                  {% endfor %}
+                  </div>
+                </div>
+                <div>
+                  <div class="form-label mb-2">Time Schedule</div>
+                  <input type="hidden" name="daynight_schedule_enabled_present" value="1">
+                  <div class="form-check form-switch mb-3">
+                    <input class="form-check-input" id="daynight_schedule_enabled" type="checkbox" name="daynight_schedule_enabled" {% if camera.native_daynight_schedule_enabled %}checked{% endif %} {% if not camera.native_daynight_supported %}disabled{% endif %}>
+                    <label class="form-check-label" for="daynight_schedule_enabled">Use time-based schedule</label>
+                  </div>
+                  <div class="row g-3">
+                    <div class="col-12 col-md-6">
+                      <label class="form-label" for="daynight_schedule_start_at">Start photosensing at</label>
+                      <input class="form-control" id="daynight_schedule_start_at" type="time" name="daynight_schedule_start_at" value="{{ camera.native_daynight_schedule_start_at }}" {% if not camera.native_daynight_supported %}disabled{% endif %}>
+                    </div>
+                    <div class="col-12 col-md-6">
+                      <label class="form-label" for="daynight_schedule_stop_at">Stop photosensing at</label>
+                      <input class="form-control" id="daynight_schedule_stop_at" type="time" name="daynight_schedule_stop_at" value="{{ camera.native_daynight_schedule_stop_at }}" {% if not camera.native_daynight_supported %}disabled{% endif %}>
+                    </div>
+                  </div>
+                </div>
+                <p class="text-body-secondary mt-3 mb-0">Use Auto for sensor-driven switching, tune the gain thresholds, and choose which hardware controls or schedules photosensing should drive.</p>
+              {% if camera.native_daynight_running_mode %}
+                <p class="small text-body-secondary mt-3 mb-0">Current runtime mode: {{ camera.native_daynight_running_mode }}</p>
+              {% endif %}
+              </div>
+            </div>
+          </div>
+
+        {% set privacy = namespace(supported=false) %}
+        {% for stream in camera.native_stream_controls %}
+          {% if stream.osd_privacy_enabled_supported or stream.osd_privacy_text_supported or stream.osd_privacy_fill_color_supported or stream.osd_privacy_stroke_color_supported %}
+            {% set privacy.supported = true %}
+          {% endif %}
+        {% endfor %}
+        {% if privacy.supported %}
+          <h3 class="h5 mb-3" id="privacy-overlay-settings">Privacy Screen Overlays</h3>
+          <div class="card border-0 bg-body-tertiary mb-4">
+            <div class="card-body">
+              <p class="text-body-secondary mb-3">Configure the dedicated privacy OSD layers for each stream. This mirrors the camera web UI and applies through the native API.</p>
+              <div class="row g-3">
+              {% for stream in camera.native_stream_controls %}
+                {% if stream.osd_privacy_enabled_supported or stream.osd_privacy_text_supported or stream.osd_privacy_fill_color_supported or stream.osd_privacy_stroke_color_supported %}
+                <div class="col-12 col-xl-6">
+                  <div class="border rounded p-3 h-100">
+                    <h4 class="h6 mb-1">{{ stream.label }}</h4>
+                    <p class="small text-body-secondary mb-3">Dedicated privacy overlay content for {{ stream.name }}.</p>
+                  {% if stream.osd_privacy_enabled_supported %}
+                    <input type="hidden" name="{{ stream.name }}_osd_privacy_enabled_present" value="1">
+                  {% endif %}
+                    <div class="form-check form-switch mb-3">
+                      <input class="form-check-input" id="{{ stream.name }}_osd_privacy_enabled" type="checkbox" name="{{ stream.name }}_osd_privacy_enabled" {% if stream.osd_privacy_enabled %}checked{% endif %} {% if not stream.osd_privacy_enabled_supported %}disabled{% endif %}>
+                      <label class="form-check-label" for="{{ stream.name }}_osd_privacy_enabled">Enabled on start</label>
+                    </div>
+                    <div class="mb-3">
+                      <label class="form-label" for="{{ stream.name }}_osd_privacy_text">Overlay text</label>
+                      <input class="form-control" id="{{ stream.name }}_osd_privacy_text" type="text" name="{{ stream.name }}_osd_privacy_text" maxlength="160" value="{{ stream.osd_privacy_text }}" placeholder="PRIVACY ENABLED" {% if not stream.osd_privacy_text_supported %}disabled{% endif %}>
+                    </div>
+                    <div class="row g-3">
+                      <div class="col-12 col-sm-6">
+                        <label class="form-label" for="{{ stream.name }}_osd_privacy_fill_color">Fill color</label>
+                        <input class="form-control form-control-color" id="{{ stream.name }}_osd_privacy_fill_color" type="color" name="{{ stream.name }}_osd_privacy_fill_color" value="{{ stream.osd_privacy_fill_color_value }}" {% if not stream.osd_privacy_fill_color_supported %}disabled{% endif %}>
+                        <input type="hidden" name="{{ stream.name }}_osd_privacy_fill_alpha" value="{{ stream.osd_privacy_fill_alpha }}">
+                      </div>
+                      <div class="col-12 col-sm-6">
+                        <label class="form-label" for="{{ stream.name }}_osd_privacy_stroke_color">Stroke color</label>
+                        <input class="form-control form-control-color" id="{{ stream.name }}_osd_privacy_stroke_color" type="color" name="{{ stream.name }}_osd_privacy_stroke_color" value="{{ stream.osd_privacy_stroke_color_value }}" {% if not stream.osd_privacy_stroke_color_supported %}disabled{% endif %}>
+                        <input type="hidden" name="{{ stream.name }}_osd_privacy_stroke_alpha" value="{{ stream.osd_privacy_stroke_alpha }}">
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                {% endif %}
+              {% endfor %}
+              </div>
+            </div>
+          </div>
+        {% endif %}
+
+        {% if camera.native_stream_controls %}
+          <h3 class="h5 mb-3" id="stream-audio-settings">Stream Parameters</h3>
+          <div class="row g-3 mb-4">
+          {% for stream in camera.native_stream_controls %}
+            <div class="col-12 col-xl-6">
+              <div class="border rounded p-3 h-100">
+                <h4 class="h6 mb-3">{{ stream.label }}</h4>
+                <div class="row g-3">
+                  <div class="col-12 col-sm-6 d-flex align-items-end">
+                    <div class="form-check mb-2">
+                    {% if stream.enabled_supported %}
+                      <input type="hidden" name="{{ stream.name }}_enabled_present" value="1">
+                    {% endif %}
+                      <input class="form-check-input" id="{{ stream.name }}_enabled" type="checkbox" name="{{ stream.name }}_enabled" {% if stream.enabled %}checked{% endif %} {% if not stream.enabled_supported %}disabled{% endif %}>
+                      <label class="form-check-label" for="{{ stream.name }}_enabled">Stream enabled</label>
+                    </div>
+                  </div>
+                  <div class="col-12 col-sm-6 d-flex align-items-end">
+                    <div class="form-check mb-2">
+                    {% if stream.audio_enabled_supported %}
+                      <input type="hidden" name="{{ stream.name }}_audio_enabled_present" value="1">
+                    {% endif %}
+                      <input class="form-check-input" id="{{ stream.name }}_audio_enabled" type="checkbox" name="{{ stream.name }}_audio_enabled" {% if stream.audio_enabled %}checked{% endif %} {% if not stream.audio_enabled_supported %}disabled{% endif %}>
+                      <label class="form-check-label" for="{{ stream.name }}_audio_enabled">Audio enabled</label>
+                    </div>
+                  </div>
+                  <div class="col-6 col-md-3">
+                    <label class="form-label" for="{{ stream.name }}_width">Width</label>
+                    <input class="form-control" id="{{ stream.name }}_width" type="number" name="{{ stream.name }}_width" value="{{ stream.width }}" {% if not stream.width_supported %}disabled{% endif %}>
+                  </div>
+                  <div class="col-6 col-md-3">
+                    <label class="form-label" for="{{ stream.name }}_height">Height</label>
+                    <input class="form-control" id="{{ stream.name }}_height" type="number" name="{{ stream.name }}_height" value="{{ stream.height }}" {% if not stream.height_supported %}disabled{% endif %}>
+                  </div>
+                  <div class="col-6 col-md-3">
+                    <label class="form-label" for="{{ stream.name }}_fps">FPS</label>
+                    <input class="form-control" id="{{ stream.name }}_fps" type="number" name="{{ stream.name }}_fps" value="{{ stream.fps }}" {% if not stream.fps_supported %}disabled{% endif %}>
+                  </div>
+                  <div class="col-6 col-md-3">
+                    <label class="form-label" for="{{ stream.name }}_bitrate">Bitrate</label>
+                    <input class="form-control" id="{{ stream.name }}_bitrate" type="number" name="{{ stream.name }}_bitrate" value="{{ stream.bitrate }}" {% if not stream.bitrate_supported %}disabled{% endif %}>
+                  </div>
+                  <div class="col-12 col-md-6">
+                    <label class="form-label" for="{{ stream.name }}_format">Format</label>
+                    <input class="form-control" id="{{ stream.name }}_format" type="text" name="{{ stream.name }}_format" value="{{ stream.format }}" {% if not stream.format_supported %}disabled{% endif %}>
+                  </div>
+                  <div class="col-12 col-md-6">
+                    <label class="form-label" for="{{ stream.name }}_mode">Mode</label>
+                    <input class="form-control" id="{{ stream.name }}_mode" type="text" name="{{ stream.name }}_mode" value="{{ stream.mode }}" {% if not stream.mode_supported %}disabled{% endif %}>
+                  </div>
+                  <div class="col-12"><hr class="my-1"></div>
+                  <div class="col-12 col-sm-4 d-flex align-items-end">
+                    <div class="form-check mb-2">
+                    {% if stream.osd_enabled_supported %}
+                      <input type="hidden" name="{{ stream.name }}_osd_enabled_present" value="1">
+                    {% endif %}
+                      <input class="form-check-input" id="{{ stream.name }}_osd_enabled" type="checkbox" name="{{ stream.name }}_osd_enabled" {% if stream.osd_enabled %}checked{% endif %} {% if not stream.osd_enabled_supported %}disabled{% endif %}>
+                      <label class="form-check-label" for="{{ stream.name }}_osd_enabled">Overlay enabled</label>
+                    </div>
+                  </div>
+                  <div class="col-12 col-sm-4 d-flex align-items-end">
+                    <div class="form-check mb-2">
+                    {% if stream.osd_time_enabled_supported %}
+                      <input type="hidden" name="{{ stream.name }}_osd_time_enabled_present" value="1">
+                    {% endif %}
+                      <input class="form-check-input" id="{{ stream.name }}_osd_time_enabled" type="checkbox" name="{{ stream.name }}_osd_time_enabled" {% if stream.osd_time_enabled %}checked{% endif %} {% if not stream.osd_time_enabled_supported %}disabled{% endif %}>
+                      <label class="form-check-label" for="{{ stream.name }}_osd_time_enabled">Time overlay</label>
+                    </div>
+                  </div>
+                  <div class="col-12 col-sm-4 d-flex align-items-end">
+                    <div class="form-check mb-2">
+                    {% if stream.osd_usertext_enabled_supported %}
+                      <input type="hidden" name="{{ stream.name }}_osd_usertext_enabled_present" value="1">
+                    {% endif %}
+                      <input class="form-check-input" id="{{ stream.name }}_osd_usertext_enabled" type="checkbox" name="{{ stream.name }}_osd_usertext_enabled" {% if stream.osd_usertext_enabled %}checked{% endif %} {% if not stream.osd_usertext_enabled_supported %}disabled{% endif %}>
+                      <label class="form-check-label" for="{{ stream.name }}_osd_usertext_enabled">Label overlay</label>
+                    </div>
+                  </div>
+                  <div class="col-12">
+                    <label class="form-label" for="{{ stream.name }}_osd_usertext_format">Label text</label>
+                    <input class="form-control" id="{{ stream.name }}_osd_usertext_format" type="text" name="{{ stream.name }}_osd_usertext_format" value="{{ stream.osd_usertext_format }}" {% if not stream.osd_usertext_format_supported %}disabled{% endif %}>
+                  </div>
+                </div>
+              </div>
+            </div>
+          {% endfor %}
+          </div>
+        {% endif %}
+
+          <div class="d-flex flex-wrap gap-2">
+            <button class="btn btn-primary" type="submit">Save Long-Term Settings</button>
+          </div>
+        </fieldset>
+      </form>
+    </div>
+  </section>
+{% endblock %}
