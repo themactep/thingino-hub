@@ -380,6 +380,40 @@ class Hub:
 
         raise RuntimeError(last_error or "Unable to fetch camera token via login")
 
+    def _fetch_snapshot_with_camera_login(self, camera: Camera, snapshot_url: str) -> tuple[bytes, str]:
+        username, password = self._camera_login_credentials(camera)
+        if not username or password == "":
+            raise RuntimeError("Camera snapshot endpoint requires authentication and camera credentials are not configured")
+
+        parsed_snapshot = urllib.parse.urlsplit(snapshot_url)
+        snapshot_origin = urllib.parse.urlunsplit((parsed_snapshot.scheme, parsed_snapshot.netloc, "/", "", ""))
+        login_url = urllib.request.urljoin(snapshot_origin, "/x/login.cgi")
+        login_payload = json.dumps(
+            {
+                "username": username,
+                "password": password,
+            },
+            separators=(",", ":"),
+        ).encode("utf-8")
+
+        handlers: list[Any] = [urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())]
+        if login_url.startswith("https://") or snapshot_url.startswith("https://"):
+            handlers.append(urllib.request.HTTPSHandler(context=ssl._create_unverified_context()))
+        opener = urllib.request.build_opener(*handlers)
+
+        login_request = urllib.request.Request(login_url, data=login_payload, method="POST")
+        login_request.add_header("Content-Type", "application/json")
+        login_request.add_header("Accept", "application/json")
+        with opener.open(login_request, timeout=self.snapshot_heartbeat_timeout_seconds):
+            pass
+
+        snapshot_request = urllib.request.Request(snapshot_url, method="GET")
+        snapshot_request.add_header("Accept", "image/jpeg, */*")
+        with opener.open(snapshot_request, timeout=self.snapshot_heartbeat_timeout_seconds) as response:
+            content_type = response.headers.get("Content-Type", "image/jpeg")
+            photo = response.read()
+        return photo, content_type
+
     def _store_camera_api_token(self, camera_id: str, api_token: str) -> Camera | None:
         resolved = self._resolve_camera_id(camera_id) or str(camera_id or "").strip().lower()
         if not resolved or not api_token:
@@ -3695,9 +3729,14 @@ class Hub:
                     raise
 
         request = self._build_snapshot_request(camera)
-        with urllib.request.urlopen(request, timeout=self.snapshot_heartbeat_timeout_seconds) as response:
-            content_type = response.headers.get("Content-Type", "image/jpeg")
-            photo = response.read()
+        try:
+            with urllib.request.urlopen(request, timeout=self.snapshot_heartbeat_timeout_seconds) as response:
+                content_type = response.headers.get("Content-Type", "image/jpeg")
+                photo = response.read()
+        except urllib.error.HTTPError as error:
+            if error.code != 401 or camera.api_key:
+                raise
+            photo, content_type = self._fetch_snapshot_with_camera_login(camera, request.full_url)
         extension = mimetypes.guess_extension(content_type.split(";", 1)[0].strip()) or ".jpg"
         filename = f"{camera.camera_id}{extension}"
         return photo, filename
@@ -4782,7 +4821,7 @@ class Hub:
         present_on_mqtt_broker = self._camera_registration_status_for_ui(camera) == "online"
         is_paired = bool(self._camera_api_token(camera))
         registered_on_hub = hub_connected or is_paired
-        has_agent = is_paired or camera.mqtt_command_status == "online"
+        has_agent = self._camera_has_agent_for_ui(camera)
         setup_status = "pair"
         if is_paired:
             setup_status = "paired"
@@ -4887,6 +4926,8 @@ class Hub:
     def _camera_registration_status_for_ui(self, camera: Camera) -> str:
         if camera.status != "online":
             return camera.status
+        if not self._camera_has_agent_for_ui(camera):
+            return camera.status
         if camera.last_registration_at is None:
             return camera.status
         if self.registration_stale_after_seconds <= 0:
@@ -4894,6 +4935,9 @@ class Hub:
         if time.time() - float(camera.last_registration_at) > self.registration_stale_after_seconds:
             return "offline"
         return camera.status
+
+    def _camera_has_agent_for_ui(self, camera: Camera) -> bool:
+        return bool(self._camera_api_token(camera)) or camera.mqtt_command_status == "online"
 
     def _camera_has_recent_live_signal(self, camera: Camera) -> bool:
         if self._timestamp_is_recent(camera.last_snapshot_ok_at, self._camera_probe_grace_seconds()):
