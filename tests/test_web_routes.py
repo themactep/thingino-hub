@@ -1,6 +1,40 @@
+import json
+import tempfile
 import unittest
+from unittest import mock
 
 from app.web import create_web_app
+
+
+class FakeUpstreamResponse:
+    def __init__(
+        self,
+        body: bytes = b"",
+        headers: dict[str, str] | None = None,
+        lines: list[bytes] | None = None,
+        status: int = 200,
+    ) -> None:
+        self._body = body
+        self.headers = headers or {}
+        self._lines = list(lines or [])
+        self.status = status
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return None
+
+    def read(self) -> bytes:
+        return self._body
+
+    def readline(self) -> bytes:
+        if self._lines:
+            return self._lines.pop(0)
+        return b""
+
+    def close(self) -> None:
+        return None
 
 
 class FakeHub:
@@ -208,15 +242,18 @@ class FakeHub:
                 "command_topic": "thingino/cam/{camera_id}/cmd",
                 "reply_topic": "thingino/cam/+/reply",
                 "registration_topic": "thingino/cam/+/hello",
+                "event_topic": "thingino/cam/+/event",
+                "state_topic": "thingino/cam/+/state",
             },
             "ui": {
                 "username": "",
                 "password": "",
                 "competency_level": "basic",
                 "registration_stale_after_seconds": 0,
-                "snapshot_heartbeat_interval_seconds": 60,
+                "snapshot_heartbeat_interval_seconds": 0,
                 "snapshot_heartbeat_timeout_seconds": 5,
                 "snapshot_cache_stale_after_seconds": 3600,
+                "api_probe_interval_seconds": 0,
             },
             "history": {
                 "enabled": True,
@@ -238,6 +275,28 @@ class FakeHub:
             raise RuntimeError("Unknown camera")
         self._sync_setup_status()
         return dict(self.camera)
+
+    def get_camera_snapshot_url_for_ui(self, camera_id: str, stream_name: str = "ch0") -> str:
+        if camera_id != "cam1":
+            raise RuntimeError("Unknown camera")
+        if stream_name == "ch1":
+            return str(self.camera.get("snapshot_ch1_url") or "")
+        return str(self.camera.get("snapshot_url") or "")
+
+    def get_cached_snapshot_for_ui(self, camera_id: str):
+        if camera_id != "cam1":
+            raise RuntimeError("Unknown camera")
+        return None
+
+    def get_camera_webrtc_url_for_ui(self, camera_id: str) -> str:
+        if camera_id != "cam1":
+            raise RuntimeError("Unknown camera")
+        return str(self.camera.get("webrtc_url") or "")
+
+    def get_camera_login_credentials_for_ui(self, camera_id: str) -> tuple[str, str]:
+        if camera_id != "cam1":
+            raise RuntimeError("Unknown camera")
+        return ("thingino", "thingino")
 
     def get_camera_supported_controls_for_ui(self, camera_id: str):
         if camera_id != "cam1":
@@ -281,7 +340,6 @@ class FakeHub:
 
     def reload_config(self):
         self.reload_called = True
-
     def update_camera_override(self, camera_id: str, override: dict[str, str]) -> None:
         if camera_id != "cam1":
             raise RuntimeError("Unknown camera")
@@ -669,6 +727,57 @@ class FakeHub:
         }
 
 
+class SensorDataProxyRouteTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.hub = FakeHub()
+        self.hub.camera["api_token"] = "test-token"
+        self.app = create_web_app(self.hub)
+        self.client = self.app.test_client()
+
+    def test_sensor_data_history_uses_agent_runtime_payload(self) -> None:
+        history_payload = {
+            "history": [
+                {
+                    "time_now": 1700000000,
+                    "total_gain": 256,
+                    "ae_luma": 36,
+                    "daynight_mode": "day",
+                }
+            ]
+        }
+
+        with mock.patch("urllib.request.urlopen", return_value=FakeUpstreamResponse(json.dumps(history_payload).encode("utf-8"), {"Content-Type": "application/json"})) as urlopen:
+            response = self.client.post("/camera/cam1/sensor-data/history")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload, {"daynight": {"history": history_payload["history"]}})
+        request_arg = urlopen.call_args.args[0]
+        self.assertEqual(request_arg.full_url, "https://192.168.1.2:1998/api/v1/runtime/sensor-data")
+        self.assertEqual(request_arg.get_header("Authorization"), "Bearer test-token")
+
+    def test_sensor_data_stream_uses_agent_event_stream(self) -> None:
+        upstream = FakeUpstreamResponse(
+            headers={"Content-Type": "text/event-stream"},
+            lines=[
+                b"retry: 2000\n",
+                b"\n",
+                b"data: {\"time_now\":1700000001,\"total_gain\":256}\n",
+                b"\n",
+                b"",
+            ],
+        )
+
+        with mock.patch("urllib.request.urlopen", return_value=upstream) as urlopen:
+            response = self.client.get("/camera/cam1/sensor-data/stream")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'data: {"time_now":1700000001,"total_gain":256}', response.data)
+        request_arg = urlopen.call_args.args[0]
+        self.assertEqual(request_arg.full_url, "https://192.168.1.2:1998/api/v1/events/sensor-data")
+        self.assertEqual(request_arg.get_header("Authorization"), "Bearer test-token")
+
+
 class WebRouteTests(unittest.TestCase):
     def setUp(self) -> None:
         self.hub = FakeHub()
@@ -712,6 +821,7 @@ class WebRouteTests(unittest.TestCase):
         self.assertIn("Step 1 of 2", body)
         self.assertIn('href="/camera/cam1/info"', body)
         self.assertIn('href="/camera/cam1/settings"', body)
+        self.assertIn('href="/camera/cam1/sensor-data"', body)
         self.assertIn('href="/camera/cam1/send2"', body)
         self.assertNotIn('href="/camera/cam1/overrides"', body)
         self.assertNotIn('href="/camera/cam1/native-actions"', body)
@@ -723,6 +833,69 @@ class WebRouteTests(unittest.TestCase):
         self.assertIn('data-copy-text="http://192.168.1.2/x/ch1.jpg"', body)
         self.assertIn('data-copy-text="http://192.168.1.2/x/ch0.mjpg"', body)
         self.assertIn('data-copy-text="http://192.168.1.2/x/ch1.mjpg"', body)
+
+    def test_camera_detail_uses_webrtc_preview_for_raptor(self) -> None:
+        self.hub.camera["api_streamer"] = "raptor"
+        self.hub.camera["webrtc_url"] = "https://192.168.1.2:8554/webrtc"
+
+        response = self.client.get("/camera/cam1")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn('src="/preview-webrtc/cam1"', body)
+        self.assertIn("Preview uses WebRTC for this camera.", body)
+        self.assertIn('data-copy-text="https://192.168.1.2:8554/webrtc"', body)
+
+    def test_camera_detail_uses_mjpeg_even_when_placeholder(self) -> None:
+        self.hub.camera["preview_state"] = "placeholder"
+        self.hub.camera["status"] = "offline"
+        self.hub.camera["mjpeg_ch0_url"] = "http://192.168.1.2/x/ch0.mjpg"
+
+        response = self.client.get("/camera/cam1")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn('src="/preview-live/cam1"', body)
+        self.assertIn('data-preview-online="true"', body)
+        self.assertIn('data-allow-offline-live="true"', body)
+        self.assertNotIn('alt="No stream available"', body)
+
+    def test_preview_webrtc_proxy_rewrites_whip_path(self) -> None:
+        self.hub.camera["api_streamer"] = "raptor"
+        self.hub.camera["webrtc_url"] = "https://192.168.1.2:8554/webrtc"
+        upstream_html = b"<script>fetch('/whip?stream='+stream,{method:'POST'})</script>"
+        with mock.patch(
+            "app.web.urllib.request.urlopen",
+            return_value=FakeUpstreamResponse(upstream_html, {"Content-Type": "text/html; charset=utf-8"}),
+        ) as mocked_urlopen:
+            response = self.client.get("/preview-webrtc/cam1")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("fetch('/preview-webrtc/cam1/whip?stream='", body)
+        request_to_camera = mocked_urlopen.call_args[0][0]
+        self.assertEqual(request_to_camera.full_url, "https://192.168.1.2:8554/webrtc")
+        self.assertTrue(str(request_to_camera.get_header("Authorization")).startswith("Basic "))
+
+    def test_preview_webrtc_whip_rewrites_location_header(self) -> None:
+        self.hub.camera["api_streamer"] = "raptor"
+        self.hub.camera["webrtc_url"] = "https://192.168.1.2:8554/webrtc"
+        upstream = FakeUpstreamResponse(
+            b"v=0\r\n",
+            {"Content-Type": "application/sdp", "Location": "/whip/session-1"},
+            status=201,
+        )
+        with mock.patch("app.web.urllib.request.urlopen", return_value=upstream) as mocked_urlopen:
+            response = self.client.post(
+                "/preview-webrtc/cam1/whip?stream=1",
+                data="v=0\r\n",
+                content_type="application/sdp",
+            )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.headers["Location"], "/preview-webrtc/cam1/whip/session-1")
+        request_to_camera = mocked_urlopen.call_args[0][0]
+        self.assertEqual(request_to_camera.full_url, "https://192.168.1.2:8554/whip?stream=1")
 
     def test_camera_detail_shows_advanced_links_for_advanced_users(self) -> None:
         self.hub.config["ui"]["competency_level"] = "advanced"
@@ -760,6 +933,7 @@ class WebRouteTests(unittest.TestCase):
         self.assertNotIn('action="/pair/cam1"', body)
         self.assertIn('href="/camera/cam1"', body)
         self.assertIn('href="/camera/cam1/settings"', body)
+        self.assertIn('href="/camera/cam1/sensor-data"', body)
         self.assertIn('href="/camera/cam1/history"', body)
         self.assertIn("Camera Info", body)
         self.assertIn("ONVIF", body)
@@ -824,6 +998,69 @@ class WebRouteTests(unittest.TestCase):
         self.assertIn("Stream Parameters", body)
         self.assertIn("stream0_width", body)
 
+    def test_camera_sensor_data_page_renders_proxy_endpoints(self) -> None:
+        response = self.client.get("/camera/cam1/sensor-data")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Raw Sensor Data Collection", body)
+        self.assertIn('data-history-url="/camera/cam1/sensor-data/history"', body)
+        self.assertIn('data-stream-url="/camera/cam1/sensor-data/stream"', body)
+        self.assertIn('/preview-live/cam1?stream=ch1', body)
+        self.assertIn("new SensorDataCollector", body)
+
+    def test_camera_sensor_data_history_proxies_camera_payload(self) -> None:
+        class FakeUpstreamResponse:
+            def __init__(self, body: bytes, content_type: str) -> None:
+                self._body = body
+                self.headers = {"Content-Type": content_type}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self) -> bytes:
+                return self._body
+
+        upstream_body = json.dumps({"history": [{"time_now": 1, "ev": 4}]}).encode("utf-8")
+        with mock.patch("app.web.urllib.request.urlopen", return_value=FakeUpstreamResponse(upstream_body, "application/json")) as mocked_urlopen:
+            response = self.client.post(
+                "/camera/cam1/sensor-data/history",
+                data=json.dumps({"daynight": {"history": None}}),
+                content_type="application/json",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), {"daynight": {"history": [{"time_now": 1, "ev": 4}]}})
+        request_to_camera = mocked_urlopen.call_args[0][0]
+        self.assertEqual(request_to_camera.full_url, "https://192.168.1.2:1998/api/v1/runtime/sensor-data")
+        self.assertEqual(request_to_camera.get_method(), "GET")
+
+    def test_camera_sensor_data_stream_proxies_event_stream(self) -> None:
+        class FakeStreamResponse:
+            def __init__(self) -> None:
+                self.headers = {"Content-Type": "text/event-stream"}
+                self._lines = [b"retry: 2000\n", b"\n", b"data: {\"time_now\":1}\n", b"\n", b""]
+
+            def readline(self) -> bytes:
+                return self._lines.pop(0)
+
+            def close(self) -> None:
+                return None
+
+        with mock.patch("app.web.urllib.request.urlopen", return_value=FakeStreamResponse()) as mocked_urlopen:
+            response = self.client.get("/camera/cam1/sensor-data/stream")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["Content-Type"], "text/event-stream")
+        self.assertEqual(response.headers["X-Accel-Buffering"], "no")
+        self.assertIn("retry: 2000", response.get_data(as_text=True))
+        request_to_camera = mocked_urlopen.call_args[0][0]
+        self.assertEqual(request_to_camera.full_url, "https://192.168.1.2:1998/api/v1/events/sensor-data")
+        self.assertEqual(request_to_camera.get_method(), "GET")
+
     def test_camera_send2_page_renders_services_and_output(self) -> None:
         self.hub.controls["native_send2_available"] = True
         self.hub.controls["native_send2_services"] = [
@@ -854,6 +1091,7 @@ class WebRouteTests(unittest.TestCase):
         self.assertIn("Send2 Test Output", body)
         self.assertIn("Save Motion &amp; Send2 Settings", body)
         self.assertIn('href="/camera/cam1/settings"', body)
+        self.assertIn('href="/camera/cam1/sensor-data"', body)
         self.assertIn('href="/camera/cam1/send2"', body)
         self.assertIn("Telegram", body)
         self.assertNotIn('name="send2telegram_video"', body)
@@ -1348,11 +1586,14 @@ class WebRouteTests(unittest.TestCase):
                 "routing_command_topic": "thingino/cam/{camera_id}/cmd",
                 "routing_reply_topic": "thingino/cam/+/reply",
                 "routing_registration_topic": "thingino/cam/+/hello",
+                "routing_event_topic": "thingino/cam/+/event",
+                "routing_state_topic": "thingino/cam/+/state",
                 "ui_username": "",
                 "ui_password": "",
                 "ui_competency_level": "expert",
                 "ui_registration_stale_after_seconds": "0",
-                "ui_snapshot_heartbeat_interval_seconds": "60",
+                "ui_snapshot_heartbeat_interval_seconds": "0",
+                "ui_api_probe_interval_seconds": "0",
                 "ui_snapshot_heartbeat_timeout_seconds": "5",
                 "ui_snapshot_cache_stale_after_seconds": "3600",
                 "history_path": "",
@@ -1577,6 +1818,59 @@ class WebRouteTests(unittest.TestCase):
         self.assertNotIn("dashboard-event-feed", body)
         self.assertNotIn("Polling OK", body)
         self.assertNotIn("Connected", body)
+        self.assertIn('src="/snapshot/cam1?stream=ch1&amp;v=1"', body)
+
+    def test_snapshot_route_fetches_live_when_cache_missing(self) -> None:
+        upstream = FakeUpstreamResponse(b"\xff\xd8\xff\xe0", {"Content-Type": "image/jpeg"})
+        with mock.patch("app.web.urllib.request.urlopen", return_value=upstream) as mocked_urlopen:
+            response = self.client.get("/snapshot/cam1?stream=ch0")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["Content-Type"], "image/jpeg")
+        request_to_camera = mocked_urlopen.call_args[0][0]
+        self.assertEqual(request_to_camera.full_url, "http://192.168.1.2/x/ch0.jpg")
+
+    def test_snapshot_route_falls_back_to_ch0_when_ch1_unavailable(self) -> None:
+        self.hub.camera["snapshot_ch1_url"] = ""
+        upstream = FakeUpstreamResponse(b"\xff\xd8\xff\xe0", {"Content-Type": "image/jpeg"})
+        with mock.patch("app.web.urllib.request.urlopen", return_value=upstream) as mocked_urlopen:
+            response = self.client.get("/snapshot/cam1?stream=ch1")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["Content-Type"], "image/jpeg")
+        request_to_camera = mocked_urlopen.call_args[0][0]
+        self.assertEqual(request_to_camera.full_url, "http://192.168.1.2/x/ch0.jpg")
+
+    def test_snapshot_route_returns_stub_when_ch1_and_ch0_fetch_fail(self) -> None:
+        with mock.patch("app.web.urllib.request.urlopen", side_effect=Exception("offline")):
+            response = self.client.get("/snapshot/cam1?stream=ch1")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("image/svg+xml", response.headers["Content-Type"])
+
+    def test_snapshot_route_falls_back_when_ch1_response_is_empty(self) -> None:
+        side_effect = [
+            FakeUpstreamResponse(b"", {"Content-Type": "image/jpeg"}),
+            FakeUpstreamResponse(b"\xff\xd8\xff\xe0", {"Content-Type": "image/jpeg"}),
+        ]
+        with mock.patch("app.web.urllib.request.urlopen", side_effect=side_effect) as mocked_urlopen:
+            response = self.client.get("/snapshot/cam1?stream=ch1")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["Content-Type"], "image/jpeg")
+        first_request = mocked_urlopen.call_args_list[0][0][0]
+        second_request = mocked_urlopen.call_args_list[1][0][0]
+        self.assertEqual(first_request.full_url, "http://192.168.1.2/x/ch1.jpg")
+        self.assertEqual(second_request.full_url, "http://192.168.1.2/x/ch0.jpg")
+
+    def test_snapshot_route_ignores_empty_cached_snapshot(self) -> None:
+        with tempfile.NamedTemporaryFile(suffix=".jpg") as cached_file:
+            with mock.patch.object(self.hub, "get_cached_snapshot_for_ui", return_value=cached_file.name):
+                with mock.patch("app.web.urllib.request.urlopen", side_effect=Exception("offline")):
+                    response = self.client.get("/snapshot/cam1?stream=ch1")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("image/svg+xml", response.headers["Content-Type"])
 
     def test_delete_camera_returns_success_summary(self) -> None:
         response = self.client.post("/delete/cam1", headers=self.json_headers)

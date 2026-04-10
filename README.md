@@ -224,6 +224,7 @@ Notes:
 - camera detail pages render from cached supported-controls data first, then hydrate native API and ONVIF details in the background so the page stays responsive while fresher state arrives
 - quick controls and camera-page refresh buttons use narrow JSON responses or queued acknowledgements rather than full camera payloads where possible
 - camera-page action feedback is shown as a floating toast instead of shifting the page layout
+- camera detail pages switch to an embedded WebRTC preview when the camera reports `api_streamer: raptor`; the endpoint list also includes a copyable WebRTC URL
 
 If camera-side revoke succeeds, the camera stays unregistered until it is explicitly registered again. If the revoke command does not reach the camera, it can still reappear later after publishing a fresh registration heartbeat.
 

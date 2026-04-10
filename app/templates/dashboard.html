@@ -13,45 +13,33 @@
       <div class="row row-cols-2 row-cols-lg-3 row-cols-xl-3 row-cols-hd-4 row-cols-fhd-5 row-cols-qhd-6 row-cols-uhd-7 g-3">
       {% for camera in cameras %}
         <article class="col">
-          <div class="card h-100 shadow-sm">
+          <div class="card h-100 shadow-sm camera-roster-card camera-roster-card-{{ camera.status|lower|replace(' ', '-') }}">
+            {% set has_snapshot_preview = camera.snapshot_url or camera.snapshot_ch1_url %}
+            {% set snapshot_stream = 'ch1' %}
             <div class="card-header py-2 px-3 d-flex justify-content-between align-items-center gap-2">
               <div class="form-check mb-0">
                 <input class="form-check-input bulk-camera-checkbox" type="checkbox" name="camera_ids" value="{{ camera.camera_id }}" form="bulk-action-form" id="bulk_camera_{{ loop.index }}">
-                <label class="form-check-label small font-monospace" for="bulk_camera_{{ loop.index }}">{{ camera.camera_id }}</label>
+                <label class="form-check-label small font-monospace" for="bulk_camera_{{ loop.index }}">{{ camera.name }}</label>
               </div>
-              <span class="badge rounded-pill {{ 'text-bg-success' if camera.status == 'online' else 'text-bg-danger' }}">{{ camera.status }}</span>
+              {% if camera.is_paired %}<i class="bi bi-shield-fill-check" style="color: #f5c400;" title="Fully paired"></i>{% endif %}
             </div>
             <a class="ratio ratio-16x9 text-decoration-none bg-body-secondary{% if camera.preview_state != 'placeholder' and camera.status == 'online' %} dashboard-live-preview{% endif %}" href="{{ url_for('camera_detail', camera_id=camera.camera_id) }}">
-            {% if camera.preview_state == 'placeholder' %}
+            {% if camera.preview_state == 'placeholder' and not has_snapshot_preview %}
               <img class="w-100 h-100 object-fit-cover rounded-top p-4" src="{{ url_for('static', filename='a/nostream.svg') }}" alt="No stream available" loading="lazy">
             {% else %}
               <img
                 class="w-100 h-100 object-fit-cover rounded-top{% if camera.preview_state == 'stale' %} snapshot-preview-stale{% endif %}"
-                src="{{ url_for('preview_snapshot', camera_id=camera.camera_id, stream='ch1', v=camera.preview_version) }}"
+                src="{{ url_for('preview_snapshot', camera_id=camera.camera_id, stream=snapshot_stream, v=camera.preview_version) }}"
                 alt="{{ camera.name }} preview"
                 loading="lazy"
                 data-preview-image
-                data-snapshot-src="{{ url_for('preview_snapshot', camera_id=camera.camera_id, stream='ch1', v=camera.preview_version) }}"
-                {% if camera.status == 'online' %}data-live-src="{{ url_for('preview_live', camera_id=camera.camera_id, stream='ch1') }}"{% endif %}
+                data-snapshot-src="{{ url_for('preview_snapshot', camera_id=camera.camera_id, stream=snapshot_stream, v=camera.preview_version) }}"
+                {% if camera.status == 'online' %}data-live-src="{{ url_for('preview_live', camera_id=camera.camera_id, stream=snapshot_stream) }}"{% endif %}
               >
             {% endif %}
             </a>
-            <div class="card-body d-flex flex-column">
-              <div class="d-flex justify-content-between align-items-start gap-1">
-                <div>
-                  <h5 class="mb-1"><a class="text-decoration-none" href="{{ url_for('camera_detail', camera_id=camera.camera_id) }}">{{ camera.name }}</a></h5>
-                  <p class="xx-small text-body-secondary mb-0">{{ camera.ip or 'no IP' }} / {{ camera.hostname or 'unknown host' }}</p>
-                  {% if camera.preview_state != 'placeholder' and camera.status == 'online' %}
-                  <p class="xx-small text-body-secondary mb-0">ch1 snapshot by default, ch1 live on hover</p>
-                  {% endif %}
-                  {% if camera.api_streamer %}
-                  <p class="xx-small text-body-secondary mb-0">API: {{ camera.api_status or 'unknown' }} / {{ camera.api_streamer }}</p>
-                  {% endif %}
-                  {% if camera.onvif_label %}
-                  <p class="xx-small text-body-secondary mb-0">{{ camera.onvif_label }}</p>
-                  {% endif %}
-                </div>
-              </div>
+            <div class="card-body">
+              <p class="xx-small text-body-secondary mb-0">{{ camera.ip or 'no IP' }} / {{ camera.hostname or 'unknown host' }}</p>
             </div>
           </div>
         </article>

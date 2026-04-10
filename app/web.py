@@ -1,11 +1,16 @@
 import copy
+import base64
+import http.cookiejar
 import hmac
 import json
 import logging
+import os
 import re
+import ssl
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from urllib.parse import urlsplit
 from typing import TYPE_CHECKING, Any
@@ -107,6 +112,216 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
                 camera["api_last_error"] = ""
         return camera
 
+    def camera_web_request(
+        camera_id: str,
+        relative_path: str,
+        *,
+        method: str = "GET",
+        data: bytes | None = None,
+        accept: str = "*/*",
+    ) -> Any:
+        camera = hub.get_camera_for_ui(camera_id)
+        web_ui_url = str(camera.get("web_ui_url") or "").strip()
+        if not web_ui_url:
+            raise RuntimeError("Camera Web UI URL is not available for this camera")
+
+        upstream_url = urllib.request.urljoin(web_ui_url, relative_path.lstrip("/"))
+        request_to_camera = urllib.request.Request(upstream_url, data=data, method=method)
+        request_to_camera.add_header("Accept", accept)
+
+        if data is not None:
+            request_to_camera.add_header("Content-Type", "application/json")
+
+        api_key = str(camera.get("api_key") or "").strip()
+        if api_key:
+            request_to_camera.add_header("X-API-Key", api_key)
+
+        open_kwargs: dict[str, Any] = {"timeout": 30}
+        if upstream_url.startswith("https://"):
+            open_kwargs["context"] = ssl._create_unverified_context()
+
+        return urllib.request.urlopen(request_to_camera, **open_kwargs)
+
+    def camera_agent_request(
+        camera_id: str,
+        relative_path: str,
+        *,
+        method: str = "GET",
+        data: bytes | None = None,
+        accept: str = "application/json",
+    ) -> Any:
+        resolved = camera_id.strip().lower()
+        if hasattr(hub, "_resolve_camera_id"):
+            try:
+                resolved = hub._resolve_camera_id(camera_id) or resolved
+            except Exception:
+                resolved = camera_id.strip().lower()
+
+        camera = None
+        if hasattr(hub, "state_lock") and hasattr(hub, "cameras"):
+            try:
+                with hub.state_lock:
+                    camera = hub.cameras.get(resolved)
+            except Exception:
+                camera = None
+
+        if camera is not None and hasattr(hub, "_camera_api_base_url"):
+            api_base_url = str(hub._camera_api_base_url(camera) or "").strip().rstrip("/")
+            api_token = str(hub._camera_api_token(camera) or "").strip() if hasattr(hub, "_camera_api_token") else ""
+        else:
+            camera_dict = hub.get_camera_for_ui(camera_id)
+            api_base_url = str(camera_dict.get("api_base_url") or "").strip().rstrip("/")
+            api_token = str(camera_dict.get("api_token") or "").strip()
+
+        if not api_base_url:
+            raise RuntimeError("Camera native API URL is not available for this camera")
+
+        normalized_path = "/" + str(relative_path or "").lstrip("/")
+        upstream_url = f"{api_base_url}{normalized_path}"
+        request_to_camera = urllib.request.Request(upstream_url, data=data, method=method)
+        request_to_camera.add_header("Accept", accept)
+
+        if data is not None:
+            request_to_camera.add_header("Content-Type", "application/json")
+
+        if api_token:
+            request_to_camera.add_header("Authorization", f"Bearer {api_token}")
+
+        open_kwargs: dict[str, Any] = {"timeout": 30}
+        if upstream_url.startswith("https://"):
+            open_kwargs["context"] = ssl._create_unverified_context()
+
+        return urllib.request.urlopen(request_to_camera, **open_kwargs)
+
+    def camera_agent_bridge_request(
+        camera_id: str,
+        agent_path: str,
+        *,
+        method: str = "GET",
+        data: bytes | None = None,
+        accept: str = "application/json",
+    ) -> Any:
+        normalized_path = "/" + str(agent_path or "").lstrip("/")
+        encoded_path = urllib.parse.quote(normalized_path, safe="/")
+        return camera_web_request(
+            camera_id,
+            f"/x/agent.cgi?agent_path={encoded_path}",
+            method=method,
+            data=data,
+            accept=accept,
+        )
+
+    def camera_webrtc_request(
+        camera_id: str,
+        path: str,
+        *,
+        method: str = "GET",
+        data: bytes | None = None,
+        query: str = "",
+        accept: str = "*/*",
+        content_type: str | None = None,
+    ) -> Any:
+        webrtc_url = str(hub.get_camera_webrtc_url_for_ui(camera_id) or "").strip()
+        if not webrtc_url:
+            raise RuntimeError("Camera WebRTC URL is not available for this camera")
+        parsed = urllib.parse.urlsplit(webrtc_url)
+        if not parsed.scheme or not parsed.netloc:
+            raise RuntimeError("Camera WebRTC URL is invalid for this camera")
+
+        normalized_path = "/" + str(path or "").lstrip("/")
+        upstream_url = urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, normalized_path, str(query or ""), ""))
+        request_to_camera = urllib.request.Request(upstream_url, data=data, method=method)
+        request_to_camera.add_header("Accept", accept)
+
+        if data is not None and content_type:
+            request_to_camera.add_header("Content-Type", content_type)
+
+        username, password = hub.get_camera_login_credentials_for_ui(camera_id)
+        if username and password != "":
+            token = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
+            request_to_camera.add_header("Authorization", f"Basic {token}")
+
+        open_kwargs: dict[str, Any] = {"timeout": 30}
+        if upstream_url.startswith("https://"):
+            open_kwargs["context"] = ssl._create_unverified_context()
+
+        return urllib.request.urlopen(request_to_camera, **open_kwargs)
+
+    def open_camera_media_request(
+        camera_id: str,
+        media_url: str,
+        *,
+        timeout: int = 30,
+        accept: str = "*/*",
+    ) -> Any:
+        camera = hub.get_camera_for_ui(camera_id)
+        request_to_camera = urllib.request.Request(media_url, method="GET")
+        request_to_camera.add_header("Accept", accept)
+        api_key = str(camera.get("api_key") or "").strip()
+        if api_key:
+            request_to_camera.add_header("X-API-Key", api_key)
+
+        open_kwargs: dict[str, Any] = {"timeout": timeout}
+        if media_url.startswith("https://"):
+            open_kwargs["context"] = ssl._create_unverified_context()
+
+        try:
+            return urllib.request.urlopen(request_to_camera, **open_kwargs)
+        except urllib.error.HTTPError as error:
+            if error.code != 401:
+                raise
+            if api_key:
+                raise
+
+        username, password = hub.get_camera_login_credentials_for_ui(camera_id)
+        if not username or password == "":
+            raise RuntimeError("Camera media endpoint requires authentication and camera credentials are not configured")
+
+        parsed_media = urllib.parse.urlsplit(media_url)
+        media_origin = urllib.parse.urlunsplit((parsed_media.scheme, parsed_media.netloc, "/", "", ""))
+        login_url = urllib.request.urljoin(media_origin, "/x/login.cgi")
+        login_payload = json.dumps(
+            {
+                "username": username,
+                "password": password,
+            },
+            separators=(",", ":"),
+        ).encode("utf-8")
+
+        handlers: list[Any] = [urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())]
+        if login_url.startswith("https://") or media_url.startswith("https://"):
+            handlers.append(urllib.request.HTTPSHandler(context=ssl._create_unverified_context()))
+        opener = urllib.request.build_opener(*handlers)
+
+        login_request = urllib.request.Request(login_url, data=login_payload, method="POST")
+        login_request.add_header("Content-Type", "application/json")
+        login_request.add_header("Accept", "application/json")
+        with opener.open(login_request, timeout=timeout):
+            pass
+
+        media_request = urllib.request.Request(media_url, method="GET")
+        media_request.add_header("Accept", accept)
+        return opener.open(media_request, timeout=timeout)
+
+    def rewrite_webrtc_html(camera_id: str, html: str) -> str:
+        prefix = f"/preview-webrtc/{camera_id}"
+        rewritten = html
+        rewritten = rewritten.replace("fetch('/whip", f"fetch('{prefix}/whip")
+        rewritten = rewritten.replace('fetch("/whip', f'fetch("{prefix}/whip')
+        return rewritten
+
+    def rewrite_webrtc_location(camera_id: str, location: str) -> str:
+        value = str(location or "").strip()
+        if not value:
+            return ""
+        if value.startswith("/"):
+            return f"/preview-webrtc/{camera_id}{value}"
+        parsed = urllib.parse.urlsplit(value)
+        if parsed.path.startswith("/"):
+            query_suffix = f"?{parsed.query}" if parsed.query else ""
+            return f"/preview-webrtc/{camera_id}{parsed.path}{query_suffix}"
+        return value
+
     def save_camera_overrides(camera_id: str) -> None:
         override_fields = (
             "name",
@@ -130,6 +345,8 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
             return url_for("camera_info", camera_id=camera_id)
         if page == "settings":
             return url_for("camera_settings", camera_id=camera_id)
+        if page == "sensor-data":
+            return url_for("camera_sensor_data", camera_id=camera_id)
         if page == "send2":
             return url_for("camera_send2", camera_id=camera_id)
         if page == "overrides":
@@ -670,6 +887,10 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
     @app.get("/camera/<camera_id>/settings")
     def camera_settings(camera_id: str) -> str:
         return render_template("camera_settings.html", camera=camera_detail_payload(camera_id))
+
+    @app.get("/camera/<camera_id>/sensor-data")
+    def camera_sensor_data(camera_id: str) -> str:
+        return render_template("camera_sensor_data.html", camera=camera_detail_payload(camera_id))
 
     @app.get("/camera/<camera_id>/send2")
     def camera_send2(camera_id: str) -> str:
@@ -1343,41 +1564,70 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
         if stream_name != "ch0":
             try:
                 snapshot_url = hub.get_camera_snapshot_url_for_ui(camera_id, stream_name)
-                camera = hub.get_camera_for_ui(camera_id)
             except Exception as error:
                 LOG.warning("Snapshot preview lookup failed for %s", camera_id, exc_info=True)
                 return Response(f"Snapshot preview unavailable: {error}\n", status=404, mimetype="text/plain")
 
-            if not snapshot_url:
-                return Response("Snapshot preview unavailable\n", status=404, mimetype="text/plain")
+            if snapshot_url:
+                try:
+                    with open_camera_media_request(camera_id, snapshot_url, timeout=15, accept="image/jpeg, */*") as upstream:
+                        body = upstream.read()
+                        content_type = upstream.headers.get("Content-Type", "image/jpeg")
+                    if not body:
+                        raise ValueError("empty snapshot response")
+                    if "image/" not in str(content_type).lower():
+                        raise ValueError(f"unsupported snapshot content type: {content_type}")
+                except Exception as error:
+                    LOG.debug("Snapshot preview stream fallback for %s/%s: %s", camera_id, stream_name, error, exc_info=True)
+                    stream_name = "ch0"
+                else:
+                    response = Response(body, mimetype=content_type)
+                    response.headers["Content-Type"] = content_type
+                    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+                    response.headers["Pragma"] = "no-cache"
+                    response.headers["Expires"] = "0"
+                    return response
 
-            request_to_camera = urllib.request.Request(snapshot_url, method="GET")
-            api_key = str(camera.get("api_key") or "").strip()
-            if api_key:
-                request_to_camera.add_header("X-API-Key", api_key)
-
-            try:
-                with urllib.request.urlopen(request_to_camera, timeout=15) as upstream:
-                    body = upstream.read()
-                    content_type = upstream.headers.get("Content-Type", "image/jpeg")
-            except urllib.error.HTTPError as error:
-                detail = error.read().decode("utf-8", errors="replace").strip() or error.reason or f"HTTP {error.code}"
-                return Response(f"Snapshot preview failed: {detail}\n", status=error.code, mimetype="text/plain")
-            except urllib.error.URLError as error:
-                return Response(f"Snapshot preview failed: {error.reason}\n", status=502, mimetype="text/plain")
-
-            response = Response(body, mimetype=content_type)
-            response.headers["Content-Type"] = content_type
-            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-            response.headers["Pragma"] = "no-cache"
-            response.headers["Expires"] = "0"
-            return response
+            if stream_name != "ch0":
+                stream_name = "ch0"
 
         try:
             cached_snapshot = hub.get_cached_snapshot_for_ui(camera_id)
         except Exception:
             LOG.warning("Snapshot preview lookup failed for %s; using fallback image", camera_id, exc_info=True)
             cached_snapshot = None
+        if cached_snapshot is not None:
+            try:
+                cached_snapshot_path = str(cached_snapshot)
+                if not os.path.isfile(cached_snapshot_path) or os.path.getsize(cached_snapshot_path) <= 0:
+                    LOG.debug("Ignoring invalid cached snapshot for %s: %s", camera_id, cached_snapshot_path)
+                    cached_snapshot = None
+            except Exception:
+                LOG.debug("Failed to validate cached snapshot for %s", camera_id, exc_info=True)
+                cached_snapshot = None
+
+        if cached_snapshot is None:
+            try:
+                snapshot_url = hub.get_camera_snapshot_url_for_ui(camera_id, "ch0")
+            except Exception:
+                snapshot_url = ""
+            if snapshot_url:
+                try:
+                    with open_camera_media_request(camera_id, snapshot_url, timeout=15, accept="image/jpeg, */*") as upstream:
+                        body = upstream.read()
+                        content_type = upstream.headers.get("Content-Type", "image/jpeg")
+                    if not body:
+                        raise ValueError("empty snapshot response")
+                    if "image/" not in str(content_type).lower():
+                        raise ValueError(f"unsupported snapshot content type: {content_type}")
+                    response = Response(body, mimetype=content_type)
+                    response.headers["Content-Type"] = content_type
+                    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+                    response.headers["Pragma"] = "no-cache"
+                    response.headers["Expires"] = "0"
+                    return response
+                except Exception:
+                    LOG.debug("Live snapshot fallback failed for %s", camera_id, exc_info=True)
 
         if cached_snapshot is None:
             response = app.send_static_file("a/nostream.svg")
@@ -1394,7 +1644,6 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
         try:
             stream_name = str(request.args.get("stream") or "ch0").strip().lower() or "ch0"
             stream_url = hub.get_camera_mjpeg_url_for_ui(camera_id, stream_name)
-            camera = hub.get_camera_for_ui(camera_id)
         except Exception as error:
             LOG.warning("Live preview lookup failed for %s", camera_id, exc_info=True)
             return Response(f"Live preview unavailable: {error}\n", status=404, mimetype="text/plain")
@@ -1402,18 +1651,15 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
         if not stream_url:
             return Response("Live preview unavailable\n", status=404, mimetype="text/plain")
 
-        request_to_camera = urllib.request.Request(stream_url, method="GET")
-        api_key = str(camera.get("api_key") or "").strip()
-        if api_key:
-            request_to_camera.add_header("X-API-Key", api_key)
-
         try:
-            upstream = urllib.request.urlopen(request_to_camera, timeout=30)
+            upstream = open_camera_media_request(camera_id, stream_url, timeout=30, accept="multipart/x-mixed-replace, */*")
         except urllib.error.HTTPError as error:
             detail = error.read().decode("utf-8", errors="replace").strip() or error.reason or f"HTTP {error.code}"
             return Response(f"Live preview failed: {detail}\n", status=error.code, mimetype="text/plain")
         except urllib.error.URLError as error:
             return Response(f"Live preview failed: {error.reason}\n", status=502, mimetype="text/plain")
+        except Exception as error:
+            return Response(f"Live preview failed: {error}\n", status=500, mimetype="text/plain")
 
         def stream() -> Any:
             try:
@@ -1431,6 +1677,211 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
+        return response
+
+    @app.get("/preview-webrtc/<camera_id>")
+    def preview_webrtc(camera_id: str) -> Response:
+        try:
+            with camera_webrtc_request(
+                camera_id,
+                "/webrtc",
+                method="GET",
+                accept="text/html, */*",
+            ) as upstream:
+                body = upstream.read()
+                content_type = upstream.headers.get("Content-Type", "text/html; charset=utf-8")
+        except urllib.error.HTTPError as error:
+            detail = error.read().decode("utf-8", errors="replace").strip() or error.reason or f"HTTP {error.code}"
+            return Response(f"WebRTC preview failed: {detail}\n", status=error.code, mimetype="text/plain")
+        except urllib.error.URLError as error:
+            return Response(f"WebRTC preview failed: {error.reason}\n", status=502, mimetype="text/plain")
+        except Exception as error:
+            return Response(f"WebRTC preview failed: {error}\n", status=500, mimetype="text/plain")
+
+        if "text/html" in content_type.lower():
+            body_text = rewrite_webrtc_html(camera_id, body.decode("utf-8", errors="replace"))
+            response = Response(body_text, mimetype="text/html")
+            response.headers["Content-Type"] = content_type
+        else:
+            response = Response(body, mimetype=content_type)
+            response.headers["Content-Type"] = content_type
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
+
+    @app.post("/preview-webrtc/<camera_id>/whip")
+    def preview_webrtc_whip(camera_id: str) -> Response:
+        raw_query = request.query_string.decode("utf-8", errors="ignore")
+        raw_body = request.get_data(cache=False)
+        content_type = str(request.headers.get("Content-Type") or "application/sdp")
+        try:
+            with camera_webrtc_request(
+                camera_id,
+                "/whip",
+                method="POST",
+                data=raw_body,
+                query=raw_query,
+                accept="application/sdp, text/plain, */*",
+                content_type=content_type,
+            ) as upstream:
+                body = upstream.read()
+                upstream_content_type = upstream.headers.get("Content-Type", "application/sdp")
+                upstream_location = upstream.headers.get("Location", "")
+                upstream_status = int(getattr(upstream, "status", 200))
+        except urllib.error.HTTPError as error:
+            detail = error.read().decode("utf-8", errors="replace").strip() or error.reason or f"HTTP {error.code}"
+            return Response(f"WebRTC signaling failed: {detail}\n", status=error.code, mimetype="text/plain")
+        except urllib.error.URLError as error:
+            return Response(f"WebRTC signaling failed: {error.reason}\n", status=502, mimetype="text/plain")
+        except Exception as error:
+            return Response(f"WebRTC signaling failed: {error}\n", status=500, mimetype="text/plain")
+
+        response = Response(body, status=upstream_status, mimetype=upstream_content_type)
+        response.headers["Content-Type"] = upstream_content_type
+        rewritten_location = rewrite_webrtc_location(camera_id, upstream_location)
+        if rewritten_location:
+            response.headers["Location"] = rewritten_location
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
+
+    @app.delete("/preview-webrtc/<camera_id>/whip")
+    @app.delete("/preview-webrtc/<camera_id>/whip/<path:resource_path>")
+    def preview_webrtc_whip_delete(camera_id: str, resource_path: str = "") -> Response:
+        relative_path = "/whip"
+        if resource_path:
+            relative_path = f"/whip/{resource_path.lstrip('/')}"
+        raw_query = request.query_string.decode("utf-8", errors="ignore")
+        try:
+            with camera_webrtc_request(
+                camera_id,
+                relative_path,
+                method="DELETE",
+                query=raw_query,
+                accept="text/plain, */*",
+            ) as upstream:
+                body = upstream.read()
+                upstream_content_type = upstream.headers.get("Content-Type", "text/plain")
+                upstream_status = int(getattr(upstream, "status", 200))
+        except urllib.error.HTTPError as error:
+            detail = error.read().decode("utf-8", errors="replace").strip() or error.reason or f"HTTP {error.code}"
+            return Response(f"WebRTC signaling failed: {detail}\n", status=error.code, mimetype="text/plain")
+        except urllib.error.URLError as error:
+            return Response(f"WebRTC signaling failed: {error.reason}\n", status=502, mimetype="text/plain")
+        except Exception as error:
+            return Response(f"WebRTC signaling failed: {error}\n", status=500, mimetype="text/plain")
+
+        response = Response(body, status=upstream_status, mimetype=upstream_content_type)
+        response.headers["Content-Type"] = upstream_content_type
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
+
+    @app.post("/camera/<camera_id>/sensor-data/history")
+    def camera_sensor_data_history(camera_id: str) -> Response:
+        try:
+            with camera_agent_request(
+                camera_id,
+                "/runtime/sensor-data",
+                method="GET",
+                accept="application/json",
+            ) as upstream:
+                body = upstream.read()
+        except Exception:
+            try:
+                with camera_agent_bridge_request(
+                    camera_id,
+                    "/api/v1/runtime/sensor-data",
+                    method="GET",
+                    accept="application/json",
+                ) as upstream:
+                    body = upstream.read()
+            except urllib.error.HTTPError as error:
+                detail = error.read().decode("utf-8", errors="replace").strip() or error.reason or f"HTTP {error.code}"
+                return Response(f"Sensor data history failed: {detail}\n", status=error.code, mimetype="text/plain")
+            except urllib.error.URLError as error:
+                return Response(f"Sensor data history failed: {error.reason}\n", status=502, mimetype="text/plain")
+            except Exception as error:
+                return Response(f"Sensor data history failed: {error}\n", status=500, mimetype="text/plain")
+        except urllib.error.HTTPError as error:
+            detail = error.read().decode("utf-8", errors="replace").strip() or error.reason or f"HTTP {error.code}"
+            return Response(f"Sensor data history failed: {detail}\n", status=error.code, mimetype="text/plain")
+        except urllib.error.URLError as error:
+            return Response(f"Sensor data history failed: {error.reason}\n", status=502, mimetype="text/plain")
+        except Exception as error:
+            return Response(f"Sensor data history failed: {error}\n", status=500, mimetype="text/plain")
+
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            return Response(f"Sensor data history failed: invalid JSON: {error}\n", status=502, mimetype="text/plain")
+
+        history = []
+        if isinstance(payload, dict):
+            history_value = payload.get("history")
+            if isinstance(history_value, list):
+                history = history_value
+        body_out = json.dumps({"daynight": {"history": history}}).encode("utf-8")
+
+        response = Response(body_out, mimetype="application/json")
+        response.headers["Content-Type"] = "application/json"
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
+
+    @app.get("/camera/<camera_id>/sensor-data/stream")
+    def camera_sensor_data_stream(camera_id: str) -> Response:
+        try:
+            upstream = camera_agent_request(
+                camera_id,
+                "/events/sensor-data",
+                method="GET",
+                accept="text/event-stream",
+            )
+        except Exception:
+            try:
+                upstream = camera_agent_bridge_request(
+                    camera_id,
+                    "/api/v1/events/sensor-data",
+                    method="GET",
+                    accept="text/event-stream",
+                )
+            except urllib.error.HTTPError as error:
+                detail = error.read().decode("utf-8", errors="replace").strip() or error.reason or f"HTTP {error.code}"
+                return Response(f"Sensor data stream failed: {detail}\n", status=error.code, mimetype="text/plain")
+            except urllib.error.URLError as error:
+                return Response(f"Sensor data stream failed: {error.reason}\n", status=502, mimetype="text/plain")
+            except Exception as error:
+                return Response(f"Sensor data stream failed: {error}\n", status=500, mimetype="text/plain")
+        except urllib.error.HTTPError as error:
+            detail = error.read().decode("utf-8", errors="replace").strip() or error.reason or f"HTTP {error.code}"
+            return Response(f"Sensor data stream failed: {detail}\n", status=error.code, mimetype="text/plain")
+        except urllib.error.URLError as error:
+            return Response(f"Sensor data stream failed: {error.reason}\n", status=502, mimetype="text/plain")
+        except Exception as error:
+            return Response(f"Sensor data stream failed: {error}\n", status=500, mimetype="text/plain")
+
+        def stream() -> Any:
+            try:
+                while True:
+                    line = upstream.readline()
+                    if not line:
+                        break
+                    yield line
+            finally:
+                upstream.close()
+
+        content_type = upstream.headers.get("Content-Type", "text/event-stream")
+        response = Response(stream(), mimetype=content_type)
+        response.headers["Content-Type"] = content_type
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        response.headers["X-Accel-Buffering"] = "no"
         return response
 
     return app
@@ -1757,15 +2208,18 @@ def _config_from_form(form: Any, allow_partial: bool = False) -> dict[str, Any]:
             "command_topic": form.get("routing_command_topic", "thingino/cam/{camera_id}/cmd").strip(),
             "reply_topic": form.get("routing_reply_topic", "thingino/cam/+/reply").strip(),
             "registration_topic": form.get("routing_registration_topic", "thingino/cam/+/hello").strip(),
+            "event_topic": form.get("routing_event_topic", "thingino/cam/+/event").strip(),
+            "state_topic": form.get("routing_state_topic", "thingino/cam/+/state").strip(),
         },
         "ui": {
             "username": form.get("ui_username", "").strip(),
             "password": form.get("ui_password", ""),
             "competency_level": _normalize_competency_level(form.get("ui_competency_level")),
             "registration_stale_after_seconds": _int_value(form.get("ui_registration_stale_after_seconds"), 0),
-            "snapshot_heartbeat_interval_seconds": _int_value(form.get("ui_snapshot_heartbeat_interval_seconds"), 60),
+            "snapshot_heartbeat_interval_seconds": _int_value(form.get("ui_snapshot_heartbeat_interval_seconds"), 0),
             "snapshot_heartbeat_timeout_seconds": _int_value(form.get("ui_snapshot_heartbeat_timeout_seconds"), 5),
             "snapshot_cache_stale_after_seconds": _int_value(form.get("ui_snapshot_cache_stale_after_seconds"), 3600),
+            "api_probe_interval_seconds": _int_value(form.get("ui_api_probe_interval_seconds"), 0),
         },
         "history": {
             "enabled": form.get("history_enabled") == "on",
