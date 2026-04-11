@@ -332,17 +332,33 @@
       <div class="card h-100">
         <div class="card-body">
           <h2 class="visually-hidden">Live Preview</h2>
+          {% set has_mjpeg_preview = camera.mjpeg_ch0_url %}
+          {% if camera.webrtc_url %}
+          <div class="d-flex flex-wrap gap-2 mb-3" aria-label="WebRTC controls">
+            <select class="form-select form-select-sm" id="webrtc-stream" title="Select stream" style="width:auto; min-width: 132px;">
+              <option value="0">Main stream</option>
+              <option value="1">Sub stream</option>
+            </select>
+            <button type="button" class="btn btn-outline-secondary btn-sm" id="webrtc-connect" title="Connect or disconnect WebRTC stream">
+              <i class="bi bi-play-circle"></i> Connect
+            </button>
+            <button type="button" class="btn btn-outline-secondary btn-sm" id="webrtc-mute" title="Toggle camera audio playback" style="display:none;" aria-pressed="false">
+              <i class="bi bi-volume-off"></i> Sound
+            </button>
+            <button type="button" class="btn btn-outline-secondary btn-sm" id="webrtc-talk" title="Push to talk (hold to transmit mic)" style="display:none;">
+              <i class="bi bi-mic"></i> Hold to Talk
+            </button>
+          </div>
+          {% endif %}
           <div class="ratio ratio-16x9 bg-body-secondary rounded overflow-hidden">
-            {% set has_mjpeg_preview = camera.mjpeg_ch0_url %}
             {% if camera.webrtc_url %}
-              <iframe
-                class="w-100 h-100 border-0"
-                src="{{ url_for('preview_webrtc', camera_id=camera.camera_id) }}"
-                title="{{ camera.name }} WebRTC preview"
-                loading="eager"
-                allow="autoplay; fullscreen; microphone"
-                referrerpolicy="no-referrer"
-              ></iframe>
+              <video
+                id="camera-webrtc-video"
+                class="w-100 h-100 bg-black object-fit-contain"
+                autoplay
+                muted
+                playsinline
+              ></video>
             {% elif camera.preview_state == 'placeholder' and not has_mjpeg_preview %}
               <img class="w-100 h-100 object-fit-contain p-4" src="{{ url_for('static', filename='a/nostream.svg') }}" alt="No stream available" loading="eager">
             {% else %}
@@ -519,6 +535,419 @@
       function appendCacheBust(url) {
         const separator = url.includes('?') ? '&' : '?';
         return `${url}${separator}ts=${Date.now()}`;
+      }
+
+      function createWebrtcPreviewController(statusElement) {
+        const video = document.getElementById('camera-webrtc-video');
+        const connectButton = document.getElementById('webrtc-connect');
+        const muteButton = document.getElementById('webrtc-mute');
+        const talkButton = document.getElementById('webrtc-talk');
+        const streamSelect = document.getElementById('webrtc-stream');
+        if (!video || !connectButton || !muteButton || !talkButton || !streamSelect) {
+          return null;
+        }
+
+        const params = new URLSearchParams(window.location.search);
+        const defaultStream = params.get('stream') || sessionStorage.getItem('hub.webrtc_stream') || '0';
+        const whipBaseUrl = "{{ url_for('preview_webrtc_whip', camera_id=camera.camera_id) }}";
+        const sessionStorageKey = 'hub.webrtc_session';
+        let pc = null;
+        let sessionResource = null;
+        let micStream = null;
+        let micSender = null;
+        let isConnecting = false;
+        let disconnectTimer = null;
+        let globalPttActive = false;
+
+        function setStatus(message) {
+          if (statusElement) {
+            statusElement.textContent = message;
+          }
+        }
+
+        function normalizeSdp(rawSdp) {
+          let sdp = rawSdp || '';
+          if (sdp.includes('\\n') && !sdp.includes('\n')) {
+            sdp = sdp.replace(/\\r\\n/g, '\n').replace(/\\n/g, '\n');
+          }
+          sdp = sdp.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+          const lines = sdp
+            .split('\n')
+            .map((line) => line.trim())
+            .filter((line) => line.length > 0);
+          return `${lines.join('\r\n')}\r\n`;
+        }
+
+        function hasRequiredIceFields(sdp) {
+          return Boolean(sdp && sdp.includes('a=ice-ufrag:') && sdp.includes('a=ice-pwd:'));
+        }
+
+        function setConnectedUi(connected) {
+          connectButton.innerHTML = connected
+            ? '<i class="bi bi-stop-circle"></i> Disconnect'
+            : '<i class="bi bi-play-circle"></i> Connect';
+          muteButton.style.display = connected ? '' : 'none';
+          talkButton.style.display = connected ? '' : 'none';
+          streamSelect.disabled = connected;
+        }
+
+        function setSoundButton(enabled) {
+          muteButton.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+          muteButton.innerHTML = enabled
+            ? '<i class="bi bi-volume-up"></i> Sound'
+            : '<i class="bi bi-volume-off"></i> Sound';
+          muteButton.classList.toggle('btn-success', enabled);
+          muteButton.classList.toggle('btn-outline-secondary', !enabled);
+        }
+
+        function stopTalk() {
+          if (micStream) {
+            micStream.getTracks().forEach((track) => track.stop());
+            micStream = null;
+          }
+          if (micSender && pc) {
+            micSender.replaceTrack(null).catch((error) => {
+              const message = error instanceof Error ? error.message : String(error);
+              setStatus(`Talkback cleanup failed: ${message}`);
+            });
+          }
+          micSender = null;
+          talkButton.innerHTML = '<i class="bi bi-mic"></i> Hold to Talk';
+          talkButton.classList.remove('btn-danger');
+          talkButton.classList.add('btn-outline-secondary');
+          globalPttActive = false;
+          if (pc) {
+            setStatus('Connected');
+          }
+        }
+
+        function resolveSessionDeleteUrl(resource) {
+          const value = String(resource || '').trim();
+          if (!value) {
+            return '';
+          }
+          if (value.startsWith('/')) {
+            return value;
+          }
+          if (value.startsWith('http://') || value.startsWith('https://')) {
+            return value;
+          }
+          return `${whipBaseUrl}/${value.replace(/^\/+/, '')}`;
+        }
+
+        async function stopWebrtc(reason = 'Disconnected') {
+          if (disconnectTimer) {
+            clearTimeout(disconnectTimer);
+            disconnectTimer = null;
+          }
+          stopTalk();
+          const deleteUrl = resolveSessionDeleteUrl(sessionResource);
+          if (deleteUrl) {
+            try {
+              await fetch(deleteUrl, { method: 'DELETE' });
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              setStatus(`Session cleanup failed: ${message}`);
+            }
+          }
+          sessionStorage.removeItem(sessionStorageKey);
+          sessionResource = null;
+          if (pc) {
+            pc.close();
+            pc = null;
+          }
+          video.srcObject = null;
+          video.muted = true;
+          setSoundButton(false);
+          setConnectedUi(false);
+          setStatus(reason);
+          isConnecting = false;
+        }
+
+        async function startWebrtc() {
+          if (isConnecting || pc) {
+            return;
+          }
+          isConnecting = true;
+          setStatus('Connecting...');
+          try {
+            const staleSession = sessionStorage.getItem(sessionStorageKey);
+            if (staleSession) {
+              try {
+                await fetch(resolveSessionDeleteUrl(staleSession), { method: 'DELETE' });
+              } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                setStatus(`Stale session cleanup failed: ${message}`);
+              }
+              sessionStorage.removeItem(sessionStorageKey);
+            }
+
+            let localCandidateCount = 0;
+            pc = new RTCPeerConnection({ iceServers: [] });
+            pc.addTransceiver('video', { direction: 'recvonly' });
+            const audioTransceiver = pc.addTransceiver('audio', { direction: 'sendrecv' });
+
+            if (typeof RTCRtpSender !== 'undefined' && typeof RTCRtpSender.getCapabilities === 'function') {
+              const capabilities = RTCRtpSender.getCapabilities('audio');
+              if (capabilities && capabilities.codecs) {
+                const pcmu = capabilities.codecs.filter((codec) => codec.mimeType === 'audio/PCMU');
+                const opus = capabilities.codecs.filter((codec) => codec.mimeType === 'audio/opus');
+                if (pcmu.length > 0 && audioTransceiver.setCodecPreferences) {
+                  audioTransceiver.setCodecPreferences([...pcmu, ...opus]);
+                }
+              }
+            }
+
+            pc.ontrack = (event) => {
+              if (!video.srcObject) {
+                video.srcObject = new MediaStream();
+              }
+              video.srcObject.addTrack(event.track);
+              setStatus(`Receiving ${event.track.kind} track`);
+            };
+            pc.onicecandidate = (event) => {
+              if (event.candidate) {
+                localCandidateCount += 1;
+              }
+            };
+            pc.onconnectionstatechange = () => {
+              if (!pc) {
+                return;
+              }
+              setStatus(`PC: ${pc.connectionState} / ICE: ${pc.iceConnectionState}`);
+              if (pc.connectionState === 'failed') {
+                stopWebrtc('Connection failed');
+              }
+            };
+            pc.oniceconnectionstatechange = () => {
+              if (!pc) {
+                return;
+              }
+              setStatus(`ICE: ${pc.iceConnectionState}`);
+              if (pc.iceConnectionState === 'failed') {
+                stopWebrtc('ICE failed');
+                return;
+              }
+              if (pc.iceConnectionState === 'disconnected') {
+                if (disconnectTimer) {
+                  clearTimeout(disconnectTimer);
+                }
+                disconnectTimer = window.setTimeout(() => {
+                  if (pc && pc.iceConnectionState === 'disconnected') {
+                    stopWebrtc('ICE disconnected (timeout)');
+                  }
+                }, 6000);
+                return;
+              }
+              if (disconnectTimer && (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed')) {
+                clearTimeout(disconnectTimer);
+                disconnectTimer = null;
+              }
+            };
+
+            const waitForIceReady = async (timeoutMs) => {
+              await new Promise((resolve) => {
+                if (!pc) {
+                  resolve();
+                  return;
+                }
+                const ready = () => {
+                  const sdp = pc && pc.localDescription ? pc.localDescription.sdp : '';
+                  return Boolean(pc && pc.iceGatheringState === 'complete' && hasRequiredIceFields(sdp) && localCandidateCount > 0);
+                };
+                if (ready()) {
+                  resolve();
+                  return;
+                }
+                const timeout = window.setTimeout(() => {
+                  if (pc) {
+                    pc.removeEventListener('icegatheringstatechange', handler);
+                  }
+                  resolve();
+                }, timeoutMs);
+                const handler = () => {
+                  if (ready()) {
+                    window.clearTimeout(timeout);
+                    if (pc) {
+                      pc.removeEventListener('icegatheringstatechange', handler);
+                    }
+                    resolve();
+                  }
+                };
+                pc.addEventListener('icegatheringstatechange', handler);
+              });
+            };
+
+            const stream = streamSelect.value || '0';
+            const maxWhipAttempts = 3;
+            let response = null;
+            for (let attempt = 1; attempt <= maxWhipAttempts; attempt += 1) {
+              localCandidateCount = 0;
+              const offer = await pc.createOffer({ iceRestart: attempt > 1 });
+              await pc.setLocalDescription(offer);
+              await waitForIceReady(5000);
+              if (!pc.localDescription || !pc.localDescription.sdp) {
+                throw new Error('Missing local SDP offer');
+              }
+              if (!hasRequiredIceFields(pc.localDescription.sdp)) {
+                throw new Error('Local SDP missing ICE credentials');
+              }
+              if (localCandidateCount === 0) {
+                throw new Error('No local ICE candidates gathered');
+              }
+
+              response = await fetch(`${whipBaseUrl}?stream=${encodeURIComponent(stream)}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/sdp' },
+                body: pc.localDescription.sdp,
+              });
+              if (response.ok) {
+                break;
+              }
+              const detail = await response.text();
+              if (response.status === 400 && attempt < maxWhipAttempts) {
+                setStatus(`WHIP 400, retrying ${attempt + 1}/${maxWhipAttempts}...`);
+                continue;
+              }
+              await stopWebrtc(`Connect failed: WHIP proxy returned ${response.status}${detail ? `: ${detail}` : ''}`);
+              return;
+            }
+
+            if (!response || !response.ok) {
+              await stopWebrtc('Connect failed: WHIP did not establish after retries');
+              return;
+            }
+
+            let answerSdp = '';
+            let sessionFromResponse = response.headers.get('Location') || '';
+            const contentType = String(response.headers.get('Content-Type') || '').toLowerCase();
+            if (contentType.includes('application/json')) {
+              const payload = await response.json();
+              answerSdp = payload && payload.sdp ? payload.sdp : '';
+              if (!sessionFromResponse && payload && payload.session) {
+                sessionFromResponse = payload.session;
+              }
+            } else {
+              answerSdp = await response.text();
+            }
+            if (!answerSdp) {
+              throw new Error('Missing SDP answer from proxy');
+            }
+
+            sessionResource = sessionFromResponse;
+            if (sessionResource) {
+              sessionStorage.setItem(sessionStorageKey, sessionResource);
+            }
+            await pc.setRemoteDescription({ type: 'answer', sdp: normalizeSdp(answerSdp) });
+            video.muted = true;
+            setSoundButton(false);
+            setConnectedUi(true);
+            setStatus('Connected');
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            await stopWebrtc(`Connect failed: ${message}`);
+          } finally {
+            isConnecting = false;
+          }
+        }
+
+        async function startTalk() {
+          if (!pc || micStream) {
+            return;
+          }
+          try {
+            micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+            const track = micStream.getAudioTracks()[0];
+            const transceiver = pc.getTransceivers().find((entry) => entry.receiver && entry.receiver.track && entry.receiver.track.kind === 'audio');
+            if (transceiver) {
+              await transceiver.sender.replaceTrack(track);
+              micSender = transceiver.sender;
+            } else {
+              micSender = pc.addTrack(track, micStream);
+            }
+            talkButton.innerHTML = '<i class="bi bi-mic-mute"></i> Talking...';
+            talkButton.classList.remove('btn-outline-secondary');
+            talkButton.classList.add('btn-danger');
+            setStatus('Talkback active (release to stop)');
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            setStatus(`Mic failed: ${message}`);
+            stopTalk();
+          }
+        }
+
+        function typingInField(target) {
+          if (!target || !(target instanceof HTMLElement)) {
+            return false;
+          }
+          return target.tagName === 'INPUT'
+            || target.tagName === 'TEXTAREA'
+            || target.tagName === 'SELECT'
+            || target.isContentEditable;
+        }
+
+        streamSelect.addEventListener('change', () => {
+          sessionStorage.setItem('hub.webrtc_stream', streamSelect.value || '0');
+          if (pc) {
+            stopWebrtc('Switching stream...').then(startWebrtc);
+          }
+        });
+        connectButton.addEventListener('click', () => {
+          if (pc) {
+            stopWebrtc();
+          } else {
+            startWebrtc();
+          }
+        });
+        muteButton.addEventListener('click', () => {
+          video.muted = !video.muted;
+          setSoundButton(!video.muted);
+        });
+        talkButton.addEventListener('pointerdown', (event) => {
+          event.preventDefault();
+          startTalk();
+        });
+        talkButton.addEventListener('pointerup', stopTalk);
+        talkButton.addEventListener('pointerleave', stopTalk);
+        talkButton.addEventListener('pointercancel', stopTalk);
+        talkButton.addEventListener('keydown', (event) => {
+          if (event.code === 'Space' || event.code === 'Enter') {
+            event.preventDefault();
+            startTalk();
+          }
+        });
+        talkButton.addEventListener('keyup', (event) => {
+          if (event.code === 'Space' || event.code === 'Enter') {
+            event.preventDefault();
+            stopTalk();
+          }
+        });
+        document.addEventListener('keydown', (event) => {
+          if (event.code !== 'Space' || event.repeat || !pc || typingInField(event.target)) {
+            return;
+          }
+          event.preventDefault();
+          globalPttActive = true;
+          startTalk();
+        });
+        document.addEventListener('keyup', (event) => {
+          if (event.code !== 'Space' || !globalPttActive) {
+            return;
+          }
+          event.preventDefault();
+          globalPttActive = false;
+          stopTalk();
+        });
+        window.addEventListener('pagehide', () => {
+          if (pc || sessionResource) {
+            stopWebrtc('Disconnected');
+          }
+        });
+
+        streamSelect.value = defaultStream === '1' ? '1' : '0';
+        setConnectedUi(false);
+        setStatus('Native WebRTC client ready. Click Connect.');
+        return {};
       }
 
       function createLivePreviewController(image, statusElement) {
@@ -738,6 +1167,7 @@
         };
       }
 
+      createWebrtcPreviewController(document.getElementById('live-preview-status-text'));
       const livePreviewController = createLivePreviewController(livePreviewImage, livePreviewStatus);
 
       function escapeHtml(value) {

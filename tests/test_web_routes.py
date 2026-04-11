@@ -842,7 +842,8 @@ class WebRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
-        self.assertIn('src="/preview-webrtc/cam1"', body)
+        self.assertIn('id="camera-webrtc-video"', body)
+        self.assertNotIn('src="/preview-webrtc/cam1"', body)
         self.assertIn("Preview uses WebRTC for this camera.", body)
         self.assertIn('data-copy-text="https://192.168.1.2:8554/webrtc"', body)
 
