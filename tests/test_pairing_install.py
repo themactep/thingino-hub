@@ -284,6 +284,24 @@ class CameraUrlFallbackTests(unittest.TestCase):
         self.assertEqual(updated.ip, "192.168.88.160")
         self.assertEqual(updated.snapshot_url, "http://192.168.88.160:1998/api/v1/actions/snapshot?stream_id=0")
 
+    def test_raptor_camera_uses_snap_and_mjpeg_endpoints(self) -> None:
+        hub = object.__new__(Hub)
+        camera = Camera(
+            camera_id="cam1",
+            name="Raptor Camera",
+            ip="192.168.88.160",
+            snapshot_url="http://192.168.88.160/x/ch0.jpg",
+            api_base_url="https://192.168.88.160:1998/api/v1",
+            api_streamer="raptor",
+        )
+
+        self.assertEqual(hub._camera_snapshot_url(camera), "https://192.168.88.160:8080/snap.jpg")
+        self.assertEqual(
+            hub._camera_snapshot_url(camera, "ch1"),
+            "https://192.168.88.160:8080/snap.jpg?stream=1",
+        )
+        self.assertEqual(hub._camera_mjpeg_url(camera), "https://192.168.88.160:8080/mjpeg")
+
 
 class AutoPairingTests(unittest.TestCase):
     def test_registration_schedules_auto_pairing_for_unpaired_online_camera(self) -> None:

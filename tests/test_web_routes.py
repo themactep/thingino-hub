@@ -845,6 +845,7 @@ class WebRouteTests(unittest.TestCase):
         self.assertIn('id="camera-webrtc-video"', body)
         self.assertNotIn('src="/preview-webrtc/cam1"', body)
         self.assertIn("Preview uses WebRTC for this camera.", body)
+        self.assertIn('/snapshot/cam1?stream=ch1', body)
         self.assertIn('data-copy-text="https://192.168.1.2:8554/webrtc"', body)
 
     def test_camera_detail_uses_mjpeg_even_when_placeholder(self) -> None:
@@ -1830,6 +1831,18 @@ class WebRouteTests(unittest.TestCase):
         self.assertEqual(response.headers["Content-Type"], "image/jpeg")
         request_to_camera = mocked_urlopen.call_args[0][0]
         self.assertEqual(request_to_camera.full_url, "http://192.168.1.2/x/ch0.jpg")
+
+    def test_snapshot_route_uses_basic_auth_for_raptor_snapshots(self) -> None:
+        self.hub.camera["api_streamer"] = "raptor"
+        self.hub.camera["snapshot_url"] = "https://192.168.1.2:8080/snap.jpg"
+        upstream = FakeUpstreamResponse(b"\xff\xd8\xff\xe0", {"Content-Type": "image/jpeg"})
+        with mock.patch("app.web.urllib.request.urlopen", return_value=upstream) as mocked_urlopen:
+            response = self.client.get("/snapshot/cam1?stream=ch0")
+
+        self.assertEqual(response.status_code, 200)
+        request_to_camera = mocked_urlopen.call_args[0][0]
+        self.assertEqual(request_to_camera.full_url, "https://192.168.1.2:8080/snap.jpg")
+        self.assertTrue(str(request_to_camera.get_header("Authorization")).startswith("Basic "))
 
     def test_snapshot_route_falls_back_to_ch0_when_ch1_unavailable(self) -> None:
         self.hub.camera["snapshot_ch1_url"] = ""

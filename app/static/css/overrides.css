@@ -2,7 +2,9 @@
 
 :root {
 	--bs-body-font-family: "Montserrat", sans-serif;
+	--bs-body-color: #cfd4da;
 	--thingino-accent: #f80;
+	--thingino-camera-offline-border: #dc3545;
 	--bs-breakpoint-hd: 1600px;
 	--bs-breakpoint-fhd: 1800px;
 	--bs-breakpoint-qhd: 2000px;
@@ -17,6 +19,34 @@
 	--bs-container-xxxl: 1520px;
 	--bs-container-xxxxl: 1720px;
 	--bs-container-2k: 2240px;
+}
+
+.hub-top-header {
+	background-color: #161a1e !important;
+}
+
+.camera-roster-card {
+	transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.camera-roster-card-offline {
+	border-color: var(--thingino-camera-offline-border);
+	box-shadow: inset 0 0 0 1px var(--thingino-camera-offline-border), var(--bs-box-shadow-sm);
+}
+
+.setup-ladder-icon-wrap {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 2rem;
+	height: 2rem;
+	cursor: help;
+}
+
+.setup-ladder-icon {
+	display: block;
+	width: 2rem;
+	height: 2rem;
 }
 
 @media (max-width: 575.98px) {

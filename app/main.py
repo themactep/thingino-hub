@@ -3283,10 +3283,24 @@ class Hub:
     def _camera_snapshot_url(self, camera: Camera, stream_name: str = "ch0") -> str | None:
         normalized_stream = str(stream_name or "ch0").strip().lower()
         normalized_stream = normalized_stream.split("?", 1)[0].split("&", 1)[0] or "ch0"
-
+        is_raptor = str(camera.api_streamer or "").strip().lower() == "raptor"
         snapshot_url = camera.snapshot_url.strip()
+        parsed_snapshot = urllib.parse.urlsplit(snapshot_url) if snapshot_url else urllib.parse.SplitResult("", "", "", "", "")
+        api_base_url = self._camera_api_base_url(camera)
+        parsed_api = urllib.parse.urlsplit(api_base_url) if api_base_url else urllib.parse.SplitResult("", "", "", "", "")
+
+        if is_raptor:
+            host = self._camera_public_host(camera) or parsed_snapshot.hostname or parsed_api.hostname or ""
+            if not host:
+                return snapshot_url if normalized_stream == "ch0" else None
+            scheme = parsed_api.scheme if parsed_api.scheme in {"http", "https"} else ""
+            if not scheme:
+                scheme = parsed_snapshot.scheme if parsed_snapshot.scheme in {"http", "https"} else "https"
+            query = "stream=1" if normalized_stream == "ch1" else ""
+            return urllib.parse.urlunsplit((scheme, f"{host}:8080", "/snap.jpg", query, ""))
+
         if snapshot_url:
-            parsed = urllib.parse.urlsplit(snapshot_url)
+            parsed = parsed_snapshot
             if parsed.netloc and not parsed.path.startswith("/api/"):
                 if normalized_stream == "ch0":
                     return snapshot_url
@@ -3299,7 +3313,7 @@ class Hub:
 
         if not snapshot_url:
             return None
-        parsed = urllib.parse.urlsplit(snapshot_url)
+        parsed = parsed_snapshot
         if not parsed.netloc:
             return snapshot_url if normalized_stream == "ch0" else None
         scheme = parsed.scheme or "http"
@@ -3308,6 +3322,20 @@ class Hub:
     def _camera_mjpeg_url(self, camera: Camera, stream_name: str = "ch0") -> str:
         normalized_stream = str(stream_name or "ch0").strip().lower()
         normalized_stream = normalized_stream.split("?", 1)[0].split("&", 1)[0] or "ch0"
+        is_raptor = str(camera.api_streamer or "").strip().lower() == "raptor"
+        if is_raptor:
+            api_base_url = self._camera_api_base_url(camera)
+            parsed_api = urllib.parse.urlsplit(api_base_url) if api_base_url else urllib.parse.SplitResult("", "", "", "", "")
+            snapshot_url = camera.snapshot_url.strip()
+            parsed_snapshot = urllib.parse.urlsplit(snapshot_url) if snapshot_url else urllib.parse.SplitResult("", "", "", "", "")
+            host = self._camera_public_host(camera) or parsed_snapshot.hostname or parsed_api.hostname or ""
+            if not host:
+                return ""
+            scheme = parsed_api.scheme if parsed_api.scheme in {"http", "https"} else ""
+            if not scheme:
+                scheme = parsed_snapshot.scheme if parsed_snapshot.scheme in {"http", "https"} else "https"
+            return urllib.parse.urlunsplit((scheme, f"{host}:8080", "/mjpeg", "", ""))
+
         host = self._camera_public_host(camera)
         if host:
             return f"http://{host}/x/{normalized_stream}.mjpg"

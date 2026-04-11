@@ -333,6 +333,7 @@
         <div class="card-body">
           <h2 class="visually-hidden">Live Preview</h2>
           {% set has_mjpeg_preview = camera.mjpeg_ch0_url %}
+          {% set preview_snapshot_stream = 'ch1' if camera.api_streamer == 'raptor' else 'ch0' %}
           {% if camera.webrtc_url %}
           <div class="d-flex flex-wrap gap-2 mb-3" aria-label="WebRTC controls">
             <select class="form-select form-select-sm" id="webrtc-stream" title="Select stream" style="width:auto; min-width: 132px;">
@@ -369,7 +370,7 @@
                 loading="eager"
                 data-live-preview-image
                 data-live-src="{{ url_for('preview_live', camera_id=camera.camera_id) }}"
-                data-snapshot-src="{{ url_for('preview_snapshot', camera_id=camera.camera_id) }}"
+                data-snapshot-src="{{ url_for('preview_snapshot', camera_id=camera.camera_id, stream=preview_snapshot_stream) }}"
                 data-fallback-src="{{ url_for('static', filename='a/nostream.svg') }}"
                 data-preview-state="{{ camera.preview_state }}"
                 data-preview-online="{{ 'true' if camera.status == 'online' or has_mjpeg_preview else 'false' }}"
@@ -437,7 +438,7 @@
             <button type="button" class="btn btn-outline-secondary btn-sm" data-async-action="{{ url_for('refresh_api', camera_id=camera.camera_id) }}">Native API</button>
             <button type="button" class="btn btn-outline-secondary btn-sm" data-async-action="{{ url_for('refresh_onvif', camera_id=camera.camera_id) }}">ONVIF</button>
           {% if camera.snapshot_url %}
-            <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('preview_snapshot', camera_id=camera.camera_id) }}" target="_blank" rel="noreferrer">Snapshot URL</a>
+            <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('preview_snapshot', camera_id=camera.camera_id, stream=preview_snapshot_stream) }}" target="_blank" rel="noreferrer">Snapshot URL</a>
           {% endif %}
           {% if camera.can_delete %}
             <button type="button" class="btn btn-outline-danger btn-sm" data-async-action="{{ url_for('delete_camera', camera_id=camera.camera_id) }}" data-confirm="Remove {{ camera.name }} from the roster? It can reappear if the camera registers again.">Delete</button>

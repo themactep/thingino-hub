@@ -255,11 +255,19 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
         accept: str = "*/*",
     ) -> Any:
         camera = hub.get_camera_for_ui(camera_id)
+        is_raptor = str(camera.get("api_streamer") or "").strip().lower() == "raptor"
+        username, password = hub.get_camera_login_credentials_for_ui(camera_id)
+        basic_token = ""
+        if username and password != "":
+            basic_token = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
+
         request_to_camera = urllib.request.Request(media_url, method="GET")
         request_to_camera.add_header("Accept", accept)
         api_key = str(camera.get("api_key") or "").strip()
         if api_key:
             request_to_camera.add_header("X-API-Key", api_key)
+        if is_raptor and basic_token:
+            request_to_camera.add_header("Authorization", f"Basic {basic_token}")
 
         open_kwargs: dict[str, Any] = {"timeout": timeout}
         if media_url.startswith("https://"):
@@ -270,11 +278,16 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "") -> 
         except urllib.error.HTTPError as error:
             if error.code != 401:
                 raise
+            if is_raptor:
+                if not basic_token:
+                    raise RuntimeError(
+                        "Raptor media endpoint requires authentication and camera credentials are not configured"
+                    )
+                raise
             if api_key:
                 raise
 
-        username, password = hub.get_camera_login_credentials_for_ui(camera_id)
-        if not username or password == "":
+        if not basic_token:
             raise RuntimeError("Camera media endpoint requires authentication and camera credentials are not configured")
 
         parsed_media = urllib.parse.urlsplit(media_url)
