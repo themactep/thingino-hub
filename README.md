@@ -35,6 +35,33 @@ Examples:
 /cam garage clip 10
 ```
 
+## AI Session Onboarding Kit
+
+To speed up future assistant sessions, this repo now includes a reusable onboarding pack in:
+
+```text
+.copilot/onboarding/
+```
+
+It mirrors the "set context once, prompt less" workflow:
+
+- `01-about-me.template.md` personal working preferences template
+- `02-project-context.md` concise repo purpose and command model
+- `03-architecture-map.md` module and data-flow map
+- `04-commands-checklist.md` common run/test commands
+- `05-code-style-guardrails.md` editing and reliability rules
+- `06-task-intake.template.md` structured task framing
+- `07-session-handoff.template.md` handoff format for continuity
+- `08-kickoff-prompt.template.md` copy/paste kickoff prompt for new sessions
+
+Recommended use:
+
+1. Fill a personal "about me" file from the template (without secrets).
+2. Start new sessions with `08-kickoff-prompt.template.md`.
+3. End sessions with a handoff note based on `07-session-handoff.template.md`.
+
+This keeps sessions consistent and reduces re-explaining the project each time.
+
 ## Quick Start
 
 ### 1. Create a Telegram Bot
@@ -141,7 +168,7 @@ the older `snapshot_url`.
 ### Build the image
 
 ```sh
-podman build -t telegrambothub -f Containerfile .
+podman build -t localhost/thinginohub:latest -f Containerfile .
 ```
 
 ### Run the container
@@ -152,11 +179,11 @@ sh run-podman.sh
 
 That launcher:
 
-- rebuilds `localhost/telegrambothub:latest` by default before running
+- rebuilds `localhost/thinginohub:latest` by default before running
 - mounts `config.yaml` at `/config/config.yaml` with write access so the web UI can save changes
 - mounts `./data` at `/data` so the discovered camera registry survives container restarts
 - publishes the web UI on `http://127.0.0.1:8080`
-- runs the hub in the foreground
+- runs the hub detached (`podman run -d`)
 
 If you want to skip the rebuild and use the existing local image:
 
@@ -164,11 +191,7 @@ If you want to skip the rebuild and use the existing local image:
 SKIP_BUILD=1 sh run-podman.sh
 ```
 
-You can change the UI bind address with:
-
-```sh
-UI_BIND=0.0.0.0:8080:8080 sh run-podman.sh
-```
+`run-podman.sh` currently binds `0.0.0.0:8080->8080` directly; if you need a different bind mapping, run `podman run` manually or adjust the script.
 
 ### Run with Podman Compose
 
@@ -372,19 +395,19 @@ Example registration payload:
   "camera_id": "aabbccddeeff",
   "name": "front-door",
   "hostname": "front-door",
-
-You can combine that with auth:
-
-```sh
-export HUB_UI_USERNAME=admin
-export HUB_UI_PASSWORD=change-me
-UI_BIND=0.0.0.0:8080:8080 sh run-podman.sh
-```
   "ip": "192.168.88.128",
   "snapshot_url": "http://192.168.88.128/x/ch0.jpg",
   "status": "online",
   "timestamp": 1710000000
 }
+```
+
+You can combine that with UI auth:
+
+```sh
+export HUB_UI_USERNAME=admin
+export HUB_UI_PASSWORD=change-me
+sh run-podman.sh
 ```
 
 The hub uses `snapshot_url` for `/cam <id> snap`. If your camera already exposes a stable ONVIF snapshot URI, publish or configure that URL instead of the default snapshot path.
@@ -397,7 +420,10 @@ The hub uses `snapshot_url` for `/cam <id> snap`. If your camera already exposes
 - the hub sends the photo to Telegram with the shared hub bot token
 - the camera does not need the shared hub bot token for snapshots
 
-If the snapshot endpoint requires authentication, set a per-camera `api_key` in the hub config or use a pre-authenticated ONVIF snapshot URL.
+If the snapshot endpoint requires authentication, configure per-camera credentials in the hub:
+
+- `api_key` for API-key protected endpoints
+- `onvif_username` / `onvif_password` for Basic-auth endpoints (including Raptor `/snap.jpg` on port `8080`)
 
 `clip` is still camera-driven:
 

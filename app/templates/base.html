@@ -157,12 +157,55 @@
       });
     }
 
+    function initPasswordVisibilityToggles() {
+      document.querySelectorAll('input[type="password"]').forEach((input) => {
+        if (input.dataset.passwordToggleReady === 'true') {
+          return;
+        }
+        input.dataset.passwordToggleReady = 'true';
+
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'btn btn-outline-secondary password-toggle-button';
+        button.setAttribute('aria-label', 'Show password');
+        button.setAttribute('aria-pressed', 'false');
+        button.innerHTML = '<i class="bi bi-eye"></i>';
+
+        const setShown = (shown) => {
+          input.type = shown ? 'text' : 'password';
+          button.setAttribute('aria-pressed', shown ? 'true' : 'false');
+          button.setAttribute('aria-label', shown ? 'Hide password' : 'Show password');
+          button.innerHTML = shown ? '<i class="bi bi-eye-slash"></i>' : '<i class="bi bi-eye"></i>';
+        };
+
+        button.addEventListener('click', () => {
+          setShown(input.type === 'password');
+        });
+
+        const parent = input.parentElement;
+        if (parent && parent.classList.contains('input-group')) {
+          parent.appendChild(button);
+          return;
+        }
+
+        if (!parent) {
+          return;
+        }
+        const wrap = document.createElement('div');
+        wrap.className = 'password-toggle-wrap';
+        parent.insertBefore(wrap, input);
+        wrap.appendChild(input);
+        wrap.appendChild(button);
+      });
+    }
+
     window.thinginoClipboard = window.thinginoClipboard || {};
     window.thinginoClipboard.copy = copyTextToClipboard;
     window.thinginoClipboard.fallbackCopy = fallbackClipboardCopy;
     window.thinginoClipboard.canUseNavigator = hasNavigatorClipboard;
 
     initCopyToClipboard();
+    initPasswordVisibilityToggles();
   })();
 </script>
 </body>
