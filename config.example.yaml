@@ -17,16 +17,18 @@ routing:
   command_topic: "thingino/cam/{camera_id}/cmd"
   reply_topic: "thingino/cam/+/reply"
   registration_topic: "thingino/cam/+/hello"
+  event_topic: "thingino/cam/+/event"
+  state_topic: "thingino/cam/+/state"
 
 ui:
   username: ""
   password: ""
   competency_level: "basic"
   registration_stale_after_seconds: 0
-  snapshot_heartbeat_interval_seconds: 60
+  snapshot_heartbeat_interval_seconds: 0
   snapshot_heartbeat_timeout_seconds: 5
   snapshot_cache_stale_after_seconds: 3600
-  api_probe_interval_seconds: 300
+  api_probe_interval_seconds: 0
 
 defaults:
   onvif_username: "thingino"
@@ -38,6 +40,10 @@ history:
   recent_actions_limit: 20
   max_action_events_per_camera: 1000
   max_state_samples_per_camera: 5000
+
+pairing:
+  auto_install_on_registration: true
+  auto_install_retry_seconds: 300
 
 cameras:
   - id: "aabbccddeeff"
