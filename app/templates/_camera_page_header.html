@@ -13,10 +13,28 @@
     </div>
   </div>
 
+  {% set setup_status = camera.setup_status if camera.setup_status is defined else ('paired' if camera.is_paired else ('unavailable' if not camera.present_on_mqtt_broker else ('verifying' if camera.mqtt_command_status == 'unknown' else ('unavailable' if not camera.has_agent else ('connect' if not camera.registered_on_hub else 'pair'))))) %}
+  {% set present_on_mqtt_broker = camera.present_on_mqtt_broker if camera.present_on_mqtt_broker is defined else true %}
+  {% set is_paired = camera.is_paired if camera.is_paired is defined else false %}
+  {% set registered_on_hub = camera.registered_on_hub if camera.registered_on_hub is defined else (camera.hub_connected or is_paired) %}
+  {% set has_agent = camera.has_agent if camera.has_agent is defined else (is_paired or camera.mqtt_command_status == 'online') %}
+  {% set mqtt_command_status = camera.mqtt_command_status if camera.mqtt_command_status is defined else 'online' %}
+
   <nav class="nav nav-pills gap-2 mt-3" aria-label="Camera page navigation">
+    <span class="setup-ladder-icon-wrap" role="img"
+          aria-label="Setup progress ladder. 1. MQTT Broker: {{ 'present' if present_on_mqtt_broker else 'missing' }}. 2. Has Agent: {{ 'yes' if has_agent else ('verifying' if mqtt_command_status == 'unknown' else 'no') }}. 3. Hub Registered: {{ 'yes' if registered_on_hub else 'no' }}. 4. Paired: {{ 'yes' if is_paired else 'no' }}."
+          title="1. MQTT Broker: {{ 'present' if present_on_mqtt_broker else 'missing' }}&#10;2. Has Agent: {{ 'yes' if has_agent else ('verifying' if mqtt_command_status == 'unknown' else 'no') }}&#10;3. Hub Registered: {{ 'yes' if registered_on_hub else 'no' }}&#10;4. Paired: {{ 'yes' if is_paired else 'no' }}">
+      <svg class="setup-ladder-icon" viewBox="0 0 32 32" aria-hidden="true" focusable="false">
+        <rect x="1" y="23" width="24" height="4" rx="2" fill="{{ '#198754' if present_on_mqtt_broker else '#dc3545' }}"></rect>
+        <rect x="1" y="17" width="24" height="4" rx="2" fill="{{ '#198754' if has_agent else '#dc3545' }}"></rect>
+        <rect x="1" y="11" width="24" height="4" rx="2" fill="{{ '#198754' if registered_on_hub else '#dc3545' }}"></rect>
+        <rect x="1" y="5"  width="24" height="4" rx="2" fill="{{ '#198754' if is_paired else '#dc3545' }}"></rect>
+      </svg>
+    </span>
     <a class="btn btn-sm {{ 'btn-primary' if page_key == 'detail' else 'btn-outline-secondary' }}" href="{{ url_for('camera_detail', camera_id=camera.camera_id) }}">Camera</a>
     <a class="btn btn-sm {{ 'btn-primary' if page_key == 'info' else 'btn-outline-secondary' }}" href="{{ url_for('camera_info', camera_id=camera.camera_id) }}">Info &amp; ONVIF</a>
     <a class="btn btn-sm {{ 'btn-primary' if page_key == 'settings' else 'btn-outline-secondary' }}" href="{{ url_for('camera_settings', camera_id=camera.camera_id) }}">Settings</a>
+    <a class="btn btn-sm {{ 'btn-primary' if page_key == 'sensor-data' else 'btn-outline-secondary' }}" href="{{ url_for('camera_sensor_data', camera_id=camera.camera_id) }}">Sensor Data</a>
     <a class="btn btn-sm {{ 'btn-primary' if page_key == 'send2' else 'btn-outline-secondary' }}" href="{{ url_for('camera_send2', camera_id=camera.camera_id) }}">Send2</a>
   {% if ui_has_advanced_access %}
     <a class="btn btn-sm {{ 'btn-primary' if page_key == 'overrides' else 'btn-outline-secondary' }}" href="{{ url_for('camera_overrides', camera_id=camera.camera_id) }}">Overrides</a>
@@ -28,47 +46,7 @@
   {% endif %}
   </nav>
 
-  {% set setup_status = camera.setup_status if camera.setup_status is defined else ('paired' if camera.is_paired else ('unavailable' if not camera.present_on_mqtt_broker else ('verifying' if camera.mqtt_command_status == 'unknown' else ('unavailable' if not camera.has_agent else ('connect' if not camera.registered_on_hub else 'pair'))))) %}
-  {% set present_on_mqtt_broker = camera.present_on_mqtt_broker if camera.present_on_mqtt_broker is defined else true %}
-  {% set is_paired = camera.is_paired if camera.is_paired is defined else false %}
-  {% set registered_on_hub = camera.registered_on_hub if camera.registered_on_hub is defined else (camera.hub_connected or is_paired) %}
-  {% set has_agent = camera.has_agent if camera.has_agent is defined else (is_paired or camera.mqtt_command_status == 'online') %}
-  <div class="card mt-3 shadow-sm">
-    <div class="card-body py-3">
-      <div class="d-flex flex-column flex-md-row justify-content-between gap-2 mb-2">
-        <div class="fw-semibold">Setup Ladder</div>
-        <div class="small text-body-secondary">One state source: broker presence, agent capability, hub registration, pairing.</div>
-      </div>
-      <div class="row g-2 small">
-        <div class="col-6 col-xl-3">
-          <div class="border rounded p-2 h-100">
-            <div class="text-body-secondary text-uppercase small">1. MQTT Broker</div>
-            <div class="fw-semibold {{ 'text-success' if present_on_mqtt_broker else 'text-danger' }}">{{ 'present' if present_on_mqtt_broker else 'missing' }}</div>
-          </div>
-        </div>
-        <div class="col-6 col-xl-3">
-          <div class="border rounded p-2 h-100">
-            <div class="text-body-secondary text-uppercase small">2. Has Agent</div>
-            <div class="fw-semibold {{ 'text-success' if has_agent else ('text-body-secondary' if mqtt_command_status == 'unknown' else 'text-danger') }}">{{ 'yes' if has_agent else ('verifying' if mqtt_command_status == 'unknown' else 'no') }}</div>
-          </div>
-        </div>
-        <div class="col-6 col-xl-3">
-          <div class="border rounded p-2 h-100">
-            <div class="text-body-secondary text-uppercase small">3. Hub Registered</div>
-            <div class="fw-semibold {{ 'text-success' if registered_on_hub else 'text-danger' }}">{{ 'yes' if registered_on_hub else 'no' }}</div>
-          </div>
-        </div>
-        <div class="col-6 col-xl-3">
-          <div class="border rounded p-2 h-100">
-            <div class="text-body-secondary text-uppercase small">4. Paired</div>
-            <div class="fw-semibold {{ 'text-success' if is_paired else 'text-danger' }}">{{ 'yes' if is_paired else 'no' }}</div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
   {% if setup_status != 'paired' %}
-  {% set mqtt_command_status = camera.mqtt_command_status if camera.mqtt_command_status is defined else 'online' %}
   {% set mqtt_command_last_error = camera.mqtt_command_last_error if camera.mqtt_command_last_error is defined else '' %}
   {% if setup_status == 'unavailable' %}
   <div class="alert alert-warning mt-3 shadow-sm" role="alert">

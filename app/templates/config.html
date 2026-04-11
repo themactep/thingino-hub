@@ -79,6 +79,14 @@
               <label class="form-label">Registration topic</label>
               <input class="form-control" type="text" name="routing_registration_topic" value="{{ config.routing.registration_topic }}">
             </div>
+            <div class="col-12 col-lg-6">
+              <label class="form-label">Event topic</label>
+              <input class="form-control" type="text" name="routing_event_topic" value="{{ config.routing.event_topic }}">
+            </div>
+            <div class="col-12 col-lg-6">
+              <label class="form-label">State topic</label>
+              <input class="form-control" type="text" name="routing_state_topic" value="{{ config.routing.state_topic }}">
+            </div>
           </div>
         </section>
 
@@ -110,6 +118,10 @@
               <input class="form-control" type="number" min="0" name="ui_snapshot_heartbeat_interval_seconds" value="{{ config.ui.snapshot_heartbeat_interval_seconds }}">
             </div>
             <div class="col-12 col-md-2">
+              <label class="form-label">API probe interval</label>
+              <input class="form-control" type="number" min="0" name="ui_api_probe_interval_seconds" value="{{ config.ui.api_probe_interval_seconds }}">
+            </div>
+            <div class="col-12 col-md-2">
               <label class="form-label">Snapshot heartbeat timeout</label>
               <input class="form-control" type="number" min="1" name="ui_snapshot_heartbeat_timeout_seconds" value="{{ config.ui.snapshot_heartbeat_timeout_seconds }}">
             </div>
@@ -118,7 +130,7 @@
               <input class="form-control" type="number" min="0" name="ui_snapshot_cache_stale_after_seconds" value="{{ config.ui.snapshot_cache_stale_after_seconds }}">
             </div>
           </div>
-          <p class="small text-body-secondary mt-2">If both auth fields are set, the web UI uses HTTP Basic Auth. User competency controls whether expert-only pages, including the raw native config patch editor, appear in the interface. Registration staleness is optional fallback logic for retained MQTT registrations. Snapshot heartbeat actively refreshes each camera preview into the local cache and updates the dashboard badge without removing the camera from the roster. When the camera goes offline, recent cached previews remain visible with a muted treatment until the cached snapshot age exceeds the stale threshold, after which the placeholder is shown instead. Set the heartbeat interval to 0 to disable background refresh. Environment variables <code>HUB_UI_USERNAME</code> and <code>HUB_UI_PASSWORD</code> still override the auth values when present.</p>
+          <p class="small text-body-secondary mt-2">If both auth fields are set, the web UI uses HTTP Basic Auth. User competency controls whether expert-only pages, including the native config patch editor, appear in the interface. Registration staleness is optional fallback logic for retained MQTT registrations. Snapshot heartbeat actively refreshes each camera preview into the local cache and updates the dashboard badge without removing the camera from the roster. API probe does direct native API refreshes in the background. Set either interval to 0 to disable that background polling. Environment variables <code>HUB_UI_USERNAME</code> and <code>HUB_UI_PASSWORD</code> still override the auth values when present.</p>
         </section>
 
         <section class="mb-4">

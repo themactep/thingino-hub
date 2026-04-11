@@ -412,7 +412,7 @@ class Send2ControlsForUiTests(unittest.TestCase):
         """Return a mock CameraApiClient with canned responses."""
         client = MagicMock(spec=CameraApiClient)
         client.get_config.return_value = {
-            "backend": {"raw": {"motion": {"send2telegram": True, "sensitivity": 5}}}
+            "motion": {"send2telegram": True, "sensitivity": 5}
         }
         client.get_capabilities.return_value = capabilities
         def _get_setting(path: str) -> dict[str, Any]:
@@ -462,8 +462,8 @@ class Send2ControlsForUiTests(unittest.TestCase):
         self.assertTrue(svc["photo_supported"])
         self.assertFalse(svc["video_supported"])
 
-    def test_send2_not_in_config_raw_does_not_affect_result(self) -> None:
-        """Even if backend.raw has no send2 key, values come from settings endpoints."""
+    def test_send2_not_in_motion_config_does_not_affect_result(self) -> None:
+        """Even if config.motion has no send2 key, values come from settings endpoints."""
         caps = {"send2": {"ftp": {"send_photo": True, "send_video": True}}}
         settings = {
             "send2/services/ftp/send-photo": {"send_photo": True},
