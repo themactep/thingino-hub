@@ -93,6 +93,40 @@ class CameraApiClientTests(unittest.TestCase):
 
         self.assertEqual(urlopen.call_count, 3)
 
+    def test_probe_light_uses_narrow_runtime_routes(self) -> None:
+        client = CameraApiClient("https://camera/api/v1", token="token", timeout=5)
+        responses = {
+            "/device": {"id": "cam1", "name": "Cam"},
+            "/runtime/system": {"streamer_running": True},
+            "/runtime/network": {"online": True, "ip": "1.2.3.4"},
+            "/runtime/motion": {"enabled": False},
+            "/runtime/daynight": {"target_mode": "auto", "running_mode": "day"},
+            "/runtime/privacy": {"enabled": False},
+        }
+
+        def fake_urlopen(request, timeout=None, context=None):
+            path = request.full_url.split("/api/v1", 1)[1]
+            return _FakeResponse(json.dumps(responses[path]).encode("utf-8"))
+
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen) as urlopen:
+            payload = client.probe_light()
+
+        self.assertEqual(payload["device"]["id"], "cam1")
+        self.assertTrue(payload["system"]["streamer_running"])
+        self.assertEqual(payload["network"]["ip"], "1.2.3.4")
+        requested = [call.args[0].full_url for call in urlopen.call_args_list]
+        self.assertTrue(any(url.endswith("/device") for url in requested))
+        self.assertTrue(any("/runtime/system" in url for url in requested))
+        self.assertFalse(any(url.endswith("/state") for url in requested))
+        self.assertFalse(any(url.endswith("/config") for url in requested))
+        self.assertFalse(any(url.endswith("/capabilities") for url in requested))
+
+    def test_try_get_setting_returns_none_on_failure(self) -> None:
+        client = CameraApiClient("https://camera/api/v1", token="token", timeout=5)
+
+        with patch("urllib.request.urlopen", side_effect=RuntimeError("boom")):
+            self.assertIsNone(client.try_get_setting("image/hflip"))
+
 
 if __name__ == "__main__":
     unittest.main()

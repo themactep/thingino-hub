@@ -112,6 +112,7 @@ class FakeHub:
             "override_onvif_username": "",
             "override_onvif_password": "",
             "native_action_history": [],
+            "can_delete": True,
         }
         self.controls = {
             "native_controls_available": True,
@@ -319,14 +320,15 @@ class FakeHub:
         if not self.camera.get("present_on_mqtt_broker"):
             self.camera["setup_status"] = "unavailable"
             return
+        if self.camera.get("registered_on_hub"):
+            self.camera["setup_status"] = "pair"
+            return
         if self.camera.get("mqtt_command_status") == "unknown":
             self.camera["setup_status"] = "verifying"
         elif not self.camera.get("has_agent"):
             self.camera["setup_status"] = "unavailable"
-        elif not self.camera.get("registered_on_hub"):
-            self.camera["setup_status"] = "connect"
         else:
-            self.camera["setup_status"] = "pair"
+            self.camera["setup_status"] = "connect"
 
     def export_config(self):
         return {
@@ -340,9 +342,14 @@ class FakeHub:
 
     def save_config(self, config):
         self.saved_config = config
+        self.config = config
+
+    def set_config_document(self, config):
+        self.config = config
 
     def reload_config(self):
         self.reload_called = True
+
     def update_camera_override(self, camera_id: str, override: dict[str, str]) -> None:
         if camera_id != "cam1":
             raise RuntimeError("Unknown camera")
@@ -366,6 +373,12 @@ class FakeHub:
         if camera_id != "cam1":
             raise RuntimeError("Unknown camera")
         return "already_running"
+
+    def queue_camera_detail_hydration_refresh(self, camera_id: str) -> dict:
+        return {
+            "api": self.queue_camera_api_refresh(camera_id),
+            "onvif": self.queue_camera_onvif_refresh(camera_id),
+        }
 
     def queue_snapshot_refresh(self, camera_id: str) -> str:
         if camera_id != "cam1":
@@ -1194,7 +1207,7 @@ class WebRouteTests(unittest.TestCase):
         self.assertNotIn('action="/pair/cam1"', body)
         self.assertNotIn('data-async-action="/pair/cam1"', body)
 
-    def test_camera_history_page_hides_pair_step_for_legacy_registration_false_positive(self) -> None:
+    def test_camera_history_page_shows_pair_step_even_when_mqtt_probe_is_offline(self) -> None:
         self.hub.camera["hub_connected"] = True
         self.hub.camera["registered_on_hub"] = True
         self.hub.camera["api_token"] = ""
@@ -1209,10 +1222,10 @@ class WebRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
-        self.assertIn("Automatic setup is unavailable for this camera.", body)
-        self.assertNotIn("Finish Camera Setup", body)
-        self.assertNotIn("Step 2 of 2", body)
-        self.assertNotIn('action="/pair/cam1"', body)
+        self.assertIn("Finish Camera Setup", body)
+        self.assertIn("Step 2 of 2", body)
+        self.assertIn('action="/pair/cam1"', body)
+        self.assertNotIn("Automatic setup is unavailable for this camera.", body)
 
     def test_camera_detail_shows_pair_quick_action_only_after_connection_step(self) -> None:
         response = self.client.get("/camera/cam1")
@@ -1648,6 +1661,11 @@ class WebRouteTests(unittest.TestCase):
                 "ui_api_probe_interval_seconds": "0",
                 "ui_snapshot_heartbeat_timeout_seconds": "5",
                 "ui_snapshot_cache_stale_after_seconds": "3600",
+                "defaults_onvif_username": "thingino",
+                "defaults_onvif_password": "thingino",
+                "pairing_auto_install_on_registration_present": "1",
+                "pairing_auto_install_on_registration": "on",
+                "pairing_auto_install_retry_seconds": "300",
                 "history_path": "",
                 "history_recent_actions_limit": "20",
                 "history_max_action_events_per_camera": "1000",
@@ -1662,6 +1680,11 @@ class WebRouteTests(unittest.TestCase):
         self.assertEqual(response.headers["Location"], "/config")
         self.assertIsNotNone(self.hub.saved_config)
         self.assertEqual(self.hub.saved_config["ui"]["competency_level"], "expert")
+        self.assertEqual(self.hub.config["ui"]["competency_level"], "expert")
+
+        follow = self.client.get("/config")
+        self.assertEqual(follow.status_code, 200)
+        self.assertIn('<option value="expert" selected>', follow.get_data(as_text=True))
 
     def test_camera_native_actions_page_renders_history(self) -> None:
         self.hub.config["ui"]["competency_level"] = "advanced"
@@ -1886,6 +1909,15 @@ class WebRouteTests(unittest.TestCase):
         self.assertNotIn("Polling OK", body)
         self.assertNotIn("Connected", body)
         self.assertIn('src="/snapshot/cam1?stream=ch1&amp;v=1"', body)
+        self.assertIn('href="/camera/cam1"', body)
+
+    def test_dashboard_camera_name_links_to_detail_page(self) -> None:
+        response = self.client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn('href="/camera/cam1">Test Camera</a>', body)
+        self.assertIn('aria-label="Select Test Camera for bulk actions"', body)
 
     def test_snapshot_route_fetches_live_when_cache_missing(self) -> None:
         upstream = FakeUpstreamResponse(b"\xff\xd8\xff\xe0", {"Content-Type": "image/jpeg"})
@@ -1959,6 +1991,14 @@ class WebRouteTests(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertIn("Removed cam1 from the roster", payload["message"])
         self.assertEqual(payload["redirect_url"], "/")
+
+    def test_camera_detail_shows_delete_action(self) -> None:
+        response = self.client.get("/camera/cam1")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn('data-async-action="/delete/cam1"', body)
+        self.assertIn(">Delete<", body)
 
     def test_status_page_renders_status_cards(self) -> None:
         response = self.client.get("/status")

@@ -105,6 +105,12 @@ class FakeHub:
             raise RuntimeError("camera not found")
         return self._refresh_onvif_result
 
+    def queue_camera_detail_hydration_refresh(self, camera_id: str) -> dict:
+        return {
+            "api": self.queue_camera_api_refresh(camera_id),
+            "onvif": self.queue_camera_onvif_refresh(camera_id),
+        }
+
     def queue_snapshot_refresh(self, camera_id: str) -> str:
         if camera_id == "missing":
             raise RuntimeError("camera not found")

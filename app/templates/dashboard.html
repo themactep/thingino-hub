@@ -17,13 +17,13 @@
             {% set has_snapshot_preview = camera.snapshot_url or camera.snapshot_ch1_url %}
             {% set snapshot_stream = 'ch1' %}
             <div class="card-header py-2 px-3 d-flex justify-content-between align-items-center gap-2">
-              <div class="form-check mb-0">
-                <input class="form-check-input bulk-camera-checkbox" type="checkbox" name="camera_ids" value="{{ camera.camera_id }}" form="bulk-action-form" id="bulk_camera_{{ loop.index }}">
-                <label class="form-check-label small font-monospace" for="bulk_camera_{{ loop.index }}">{{ camera.name }}</label>
+              <div class="form-check mb-0 d-flex align-items-center gap-2 flex-grow-1 min-w-0">
+                <input class="form-check-input bulk-camera-checkbox" type="checkbox" name="camera_ids" value="{{ camera.camera_id }}" form="bulk-action-form" id="bulk_camera_{{ loop.index }}" aria-label="Select {{ camera.name }} for bulk actions">
+                <a class="small font-monospace text-truncate link-body-emphasis text-decoration-none" href="{{ url_for('camera_detail', camera_id=camera.camera_id) }}">{{ camera.name }}</a>
               </div>
               {% if camera.is_paired %}<i class="bi bi-shield-fill-check" style="color: #f5c400;" title="Fully paired"></i>{% endif %}
             </div>
-            <a class="ratio ratio-16x9 text-decoration-none bg-body-secondary{% if camera.preview_state != 'placeholder' and camera.status == 'online' %} dashboard-live-preview{% endif %}" href="{{ url_for('camera_detail', camera_id=camera.camera_id) }}">
+            <a class="ratio ratio-16x9 text-decoration-none bg-body-secondary dashboard-camera-link{% if camera.preview_state != 'placeholder' and camera.status == 'online' %} dashboard-live-preview{% endif %}" href="{{ url_for('camera_detail', camera_id=camera.camera_id) }}">
             {% if camera.preview_state == 'placeholder' and not has_snapshot_preview %}
               <img class="w-100 h-100 object-fit-cover rounded-top p-4" src="{{ url_for('static', filename='a/nostream.svg') }}" alt="No stream available" loading="lazy">
             {% else %}
@@ -38,8 +38,8 @@
               >
             {% endif %}
             </a>
-            <div class="card-body">
-              <p class="xx-small text-body-secondary mb-0">{{ camera.ip or 'no IP' }} / {{ camera.hostname or 'unknown host' }}</p>
+            <div class="card-body py-2">
+              <a class="xx-small text-body-secondary text-decoration-none" href="{{ url_for('camera_detail', camera_id=camera.camera_id) }}">{{ camera.ip or 'no IP' }} / {{ camera.hostname or 'unknown host' }}</a>
             </div>
           </div>
         </article>

@@ -30,8 +30,20 @@ class CameraApiClient:
     def get_capabilities(self) -> dict[str, Any]:
         return self._json_request("GET", "/capabilities")
 
+    def get_capability_group(self, group: str) -> dict[str, Any]:
+        normalized = str(group or "").strip().strip("/")
+        if not normalized:
+            raise CameraApiError("Capability group is required")
+        return self._json_request("GET", f"/capabilities/{normalized}")
+
     def get_state(self) -> dict[str, Any]:
         return self._json_request("GET", "/state")
+
+    def get_runtime(self, resource: str) -> dict[str, Any]:
+        normalized = str(resource or "").strip().strip("/")
+        if not normalized:
+            raise CameraApiError("Runtime resource is required")
+        return self._json_request("GET", f"/runtime/{normalized}")
 
     def get_config(self) -> dict[str, Any]:
         return self._json_request("GET", "/config")
@@ -122,13 +134,43 @@ class CameraApiClient:
         return self._json_request("POST", f"/actions/{normalized}", payload=payload, timeout=timeout or self._control_timeout())
 
     def probe(self) -> dict[str, Any]:
-        # /state can be slow on loaded cameras; use the control timeout.
+        # Legacy omnibus probe. Prefer probe_light() for routine hub refreshes.
         t = self._control_timeout()
         return {
             "device": self._json_request("GET", "/device", timeout=t),
             "capabilities": self._json_request("GET", "/capabilities", timeout=t),
             "state": self._json_request("GET", "/state", timeout=t),
         }
+
+    def probe_light(self) -> dict[str, Any]:
+        """Status probe using narrow routes (no /config, /state, or full /capabilities)."""
+        t = self._control_timeout()
+        return {
+            "device": self._json_request("GET", "/device", timeout=t),
+            "system": self.get_runtime("system"),
+            "network": self.get_runtime("network"),
+            "motion": self.get_runtime("motion"),
+            "daynight": self.get_runtime("daynight"),
+            "privacy": self.get_runtime("privacy"),
+        }
+
+    def try_get_setting(self, path: str) -> dict[str, Any] | None:
+        try:
+            return self.get_setting(path)
+        except Exception:
+            return None
+
+    def try_get_runtime(self, resource: str) -> dict[str, Any] | None:
+        try:
+            return self.get_runtime(resource)
+        except Exception:
+            return None
+
+    def try_get_capability_group(self, group: str) -> dict[str, Any] | None:
+        try:
+            return self.get_capability_group(group)
+        except Exception:
+            return None
 
     def stream_events(self) -> Any:
         url = f"{self.base_url}/events"

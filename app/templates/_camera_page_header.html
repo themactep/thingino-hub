@@ -51,7 +51,7 @@
   {% if setup_status == 'unavailable' %}
   <div class="alert alert-warning mt-3 shadow-sm" role="alert">
     <div class="fw-semibold mb-1">Automatic setup is unavailable for this camera.</div>
-    <div class="small">It published a registration but did not answer the hub MQTT command probe, so it looks like legacy registration only and not an agent-capable camera.</div>
+    <div class="small">It published a registration but is not answering hub MQTT commands after several probes, so the hub cannot push a pairing bundle. Check that the camera agent is running and subscribed to <span class="font-monospace">cmd</span>, then refresh this page.</div>
   {% if mqtt_command_last_error %}
     <div class="small mt-2 text-body-secondary">Last probe result: {{ mqtt_command_last_error }}</div>
   {% endif %}
@@ -63,14 +63,14 @@
         <div>
           <h2 class="h5 mb-1">Finish Camera Setup</h2>
           {% if setup_status == 'connect' or setup_status == 'verifying' and not registered_on_hub %}
-          <p class="text-body-secondary mb-0">Step 1 of 2: connect this camera to the hub with its ONVIF credentials. After that succeeds, this page will offer the pairing step to restore full native API access.</p>
+          <p class="text-body-secondary mb-0">Step 1 of 2: register this camera with the hub using ONVIF credentials (default <span class="font-monospace">thingino / thingino</span>). After Connect succeeds, Step 2 pushes a hub-issued native API token to the camera over MQTT.</p>
           {% else %}
-          <p class="text-body-secondary mb-0">Step 2 of 2: hub registration already exists, but native API access is still limited. Install the pairing bundle now to restore the native listener and unlock full camera controls.</p>
+          <p class="text-body-secondary mb-0">Step 2 of 2: install the pairing bundle. The hub generates a bearer token, pushes it to the camera over MQTT, and stores the same token locally so native API controls work.</p>
           {% endif %}
         </div>
         <div class="small text-body-secondary">
           <div>Hub registration: {{ 'present' if registered_on_hub else 'missing' }}</div>
-          <div>Pairing token: {{ 'present' if is_paired else 'missing' }}</div>
+          <div>Native API token: {{ 'present' if is_paired else 'missing' }}</div>
         </div>
       </div>
 
@@ -88,20 +88,28 @@
         <div class="col-12 col-md-4 d-grid">
           <button class="btn btn-primary" type="submit">Connect to Hub</button>
         </div>
+      {% if ui_has_expert_access %}
+        <div class="col-12">
+          <details class="small">
+            <summary class="text-body-secondary">Expert: reuse an existing native API token</summary>
+            <div class="mt-2 col-12 col-lg-6">
+              <label class="form-label" for="connect_api_token">Native API token</label>
+              <input class="form-control font-monospace" id="connect_api_token" type="text" name="api_token" value="{{ camera.override_api_token or '' }}" placeholder="usually leave blank — hub issues this in Step 2" autocomplete="off">
+              <p class="text-body-secondary mb-0 mt-1">Only needed if the camera already has a bearer token you want the hub to keep using instead of installing a new one.</p>
+            </div>
+          </details>
+        </div>
+      {% endif %}
       </form>
-      <p class="small text-body-secondary mb-0">The pairing step stays hidden until the hub connection has been created successfully.</p>
-      {% elif setup_status == 'verifying' and not registered_on_hub %}
-      <p class="small text-body-secondary mb-0">Verifying whether this camera accepts hub MQTT commands. Setup actions stay hidden until it answers a probe.</p>
-      {% else %}
-      {% if setup_status == 'pair' %}
+      <p class="small text-body-secondary mb-0">Step 2 (Install Pairing Bundle) stays hidden until Connect succeeds. Normal pairing does not require pasting a token.</p>
+      {% elif setup_status == 'verifying' %}
+      <p class="small text-body-secondary mb-0">Verifying MQTT command capability. The camera registered with the broker; the hub is probing whether it answers commands before showing Connect{% if registered_on_hub %} / Pair{% endif %}. This usually settles within a few seconds — refresh if it sticks.</p>
+      {% elif setup_status == 'pair' %}
       <form action="{{ url_for('pair_camera', camera_id=camera.camera_id) }}" method="post" class="d-flex flex-wrap gap-2 align-items-center">
         <input type="hidden" name="redirect_page" value="{{ page_key }}">
         <button class="btn btn-primary" type="submit">Install Pairing Bundle</button>
         <span class="small text-body-secondary">Installs the pairing bundle over MQTT and asks the camera to restart its hub agent.</span>
       </form>
-      {% elif setup_status == 'verifying' %}
-      <p class="small text-body-secondary mb-0">Waiting for MQTT command verification before exposing the pairing step.</p>
-      {% endif %}
       {% endif %}
     </div>
   </div>

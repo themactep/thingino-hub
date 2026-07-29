@@ -4,30 +4,36 @@
   <section class="mb-4 d-flex flex-column flex-lg-row justify-content-between align-items-lg-end gap-3">
     <div>
       <h1 class="h3 mb-1">Enroll Camera</h1>
-      <p class="text-body-secondary mb-0">Autodiscovered cameras should only need an IP and valid credentials. The primary path below repairs pairing, saves the generated API token, and hydrates the hub in one step.</p>
+      <p class="text-body-secondary mb-0">Autodiscovered cameras should only need an IP and ONVIF credentials. Connect registers the camera; Repair Pairing / Show Pairing Details is where the hub generates and shows the native API bearer token.</p>
     </div>
-    <div class="small text-body-secondary">The native API uses a bearer token. The camera web UI and ONVIF use basic auth and default to <span class="font-monospace">thingino / thingino</span> when you leave them blank.</div>
+    <div class="small text-body-secondary">Camera web UI and ONVIF use basic auth (default <span class="font-monospace">thingino / thingino</span>). The native agent bearer token is issued by the hub during pairing, not typed here for normal setup.</div>
   </section>
 
   <section class="card shadow-sm mb-4">
     <div class="card-body">
       <form action="{{ url_for('enroll_camera') }}" method="post" id="enroll-camera-form">
         <div class="row g-3">
-          <div class="col-12 col-md-6">
+          <div class="col-12 col-md-4">
             <label class="form-label" for="enroll_ip">IP</label>
             <input class="form-control" id="enroll_ip" type="text" name="ip" placeholder="192.168.88.160">
           </div>
-          <div class="col-12 col-md-6">
-            <label class="form-label" for="enroll_api_token">API token</label>
-            <input class="form-control font-monospace" id="enroll_api_token" type="text" name="api_token" placeholder="optional bearer token">
-          </div>
-          <div class="col-12 col-md-6">
+          <div class="col-12 col-md-4">
             <label class="form-label" for="enroll_onvif_username">ONVIF username</label>
             <input class="form-control" id="enroll_onvif_username" type="text" name="onvif_username" placeholder="thingino">
           </div>
-          <div class="col-12 col-md-6">
+          <div class="col-12 col-md-4">
             <label class="form-label" for="enroll_onvif_password">ONVIF password</label>
             <input class="form-control" id="enroll_onvif_password" type="password" name="onvif_password" placeholder="thingino">
+          </div>
+          <div class="col-12">
+            <details class="small">
+              <summary class="text-body-secondary">Advanced: reuse an existing native API token</summary>
+              <div class="mt-2 col-12 col-md-6">
+                <label class="form-label" for="enroll_api_token">API token</label>
+                <input class="form-control font-monospace" id="enroll_api_token" type="text" name="api_token" placeholder="leave blank for normal hub-issued pairing">
+                <p class="text-body-secondary mb-0 mt-1">Normal enroll leaves this blank. Use only when recovering a camera that already has a known bearer token.</p>
+              </div>
+            </details>
           </div>
         </div>
         <div class="d-flex flex-wrap gap-2 mt-3">

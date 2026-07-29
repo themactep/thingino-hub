@@ -972,23 +972,16 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "", api
 
     @app.post("/camera/<camera_id>/hydrate")
     def hydrate_camera_detail(camera_id: str) -> Response:
+        refreshes = {"api": "skipped", "onvif": "skipped"}
         try:
-            api_refresh = hub.queue_camera_api_refresh(camera_id)
+            refreshes = hub.queue_camera_detail_hydration_refresh(camera_id)
         except Exception as error:
-            api_refresh = f"error: {error}"
-
-        try:
-            onvif_refresh = hub.queue_camera_onvif_refresh(camera_id)
-        except Exception as error:
-            onvif_refresh = f"error: {error}"
+            refreshes = {"api": f"error: {error}", "onvif": f"error: {error}"}
 
         payload = {
             "ok": True,
             "camera": camera_detail_payload(camera_id),
-            "refreshes": {
-                "api": api_refresh,
-                "onvif": onvif_refresh,
-            },
+            "refreshes": refreshes,
         }
         return jsonify(payload)
 
@@ -1041,12 +1034,16 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "", api
     def config_editor() -> str | Response:
         if request.method == "POST":
             try:
-                new_config = _config_from_form(request.form)
+                existing = hub.export_config()
+                new_config = _config_from_form(request.form, existing=existing)
                 hub.save_config(new_config)
                 if request.form.get("action") == "save-reload":
                     hub.reload_config()
                     flash("Configuration saved and reloaded.", "success")
                 else:
+                    # Keep MQTT/Telegram sockets up, but sync the document so the
+                    # form does not snap back to pre-save in-memory values.
+                    hub.set_config_document(new_config)
                     flash("Configuration saved.", "success")
                 return redirect(url_for("config_editor"))
             except Exception as error:
@@ -1166,6 +1163,7 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "", api
                 payload = api_v2_post(
                     f"/api/v2/cameras/{camera_id}/connect",
                     {
+                        "api_token": str(request.form.get("api_token") or "").strip(),
                         "onvif_username": str(request.form.get("onvif_username") or "").strip(),
                         "onvif_password": str(request.form.get("onvif_password") or ""),
                     },
@@ -1186,6 +1184,7 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "", api
             enrollment = {
                 "camera_id": camera_id,
                 "ip": str(camera.get("ip") or "").strip(),
+                "api_token": str(request.form.get("api_token") or "").strip(),
                 "onvif_username": str(request.form.get("onvif_username") or "").strip(),
                 "onvif_password": str(request.form.get("onvif_password") or ""),
             }
@@ -2451,7 +2450,11 @@ def _split_hex_color_alpha(raw_value: Any) -> tuple[str, str]:
     return "#000000", "255"
 
 
-def _config_from_form(form: Any, allow_partial: bool = False) -> dict[str, Any]:
+def _config_from_form(
+    form: Any,
+    allow_partial: bool = False,
+    existing: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     config = {
         "telegram": {
             "token": form.get("telegram_token", "").strip(),
@@ -2485,6 +2488,21 @@ def _config_from_form(form: Any, allow_partial: bool = False) -> dict[str, Any]:
             "snapshot_cache_stale_after_seconds": _int_value(form.get("ui_snapshot_cache_stale_after_seconds"), 3600),
             "api_probe_interval_seconds": _int_value(form.get("ui_api_probe_interval_seconds"), 0),
         },
+        "defaults": {
+            "onvif_username": str(form.get("defaults_onvif_username") or "thingino").strip(),
+            "onvif_password": str(form.get("defaults_onvif_password") or "thingino"),
+        },
+        "pairing": {
+            "auto_install_on_registration": (
+                form.get("pairing_auto_install_on_registration") == "on"
+                if "pairing_auto_install_on_registration_present" in form
+                else bool((existing or {}).get("pairing", {}).get("auto_install_on_registration", True))
+            ),
+            "auto_install_retry_seconds": _int_value(
+                form.get("pairing_auto_install_retry_seconds"),
+                int((existing or {}).get("pairing", {}).get("auto_install_retry_seconds", 300) or 300),
+            ),
+        },
         "history": {
             "enabled": form.get("history_enabled") == "on",
             "path": form.get("history_path", "").strip(),
@@ -2494,6 +2512,12 @@ def _config_from_form(form: Any, allow_partial: bool = False) -> dict[str, Any]:
         },
         "cameras": _load_cameras_yaml(form.get("cameras_yaml", "")),
     }
+
+    # Preserve unknown top-level keys the form does not edit (future-proofing).
+    if existing:
+        for key, value in existing.items():
+            if key not in config:
+                config[key] = copy.deepcopy(value)
 
     if allow_partial:
         return config

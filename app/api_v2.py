@@ -231,23 +231,16 @@ def create_api_v2_app(hub: "Hub") -> FastAPI:
 
     @app.post("/api/v2/cameras/{camera_id}/hydrate")
     def api_v2_hydrate_camera(camera_id: str) -> dict[str, Any]:
+        refreshes = {"api": "skipped", "onvif": "skipped"}
         try:
-            api_refresh = hub.queue_camera_api_refresh(camera_id)
+            refreshes = hub.queue_camera_detail_hydration_refresh(camera_id)
         except Exception as error:
-            api_refresh = f"error: {error}"
-
-        try:
-            onvif_refresh = hub.queue_camera_onvif_refresh(camera_id)
-        except Exception as error:
-            onvif_refresh = f"error: {error}"
+            refreshes = {"api": f"error: {error}", "onvif": f"error: {error}"}
 
         return {
             "ok": True,
             "camera": hub.get_camera_for_ui(camera_id),
-            "refreshes": {
-                "api": api_refresh,
-                "onvif": onvif_refresh,
-            },
+            "refreshes": refreshes,
         }
 
     def _camera_action_response(camera_id: str, action: str, result: str, queued_message: str, running_message: str) -> CameraActionResponse:

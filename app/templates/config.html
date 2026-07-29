@@ -4,7 +4,7 @@
   <section class="card shadow-sm">
     <div class="card-body">
       <h2 class="h4">Configuration</h2>
-      <p class="text-body-secondary">Saving writes the YAML file used by the container. Save and reload also applies the new settings to the running hub.</p>
+      <p class="text-body-secondary">Saving writes the YAML file and updates the hub's in-memory settings used by this UI. Save and Reload also reconnects MQTT/Telegram so transport settings take effect live.</p>
       <form method="post">
         <section class="mb-4">
           <h3 class="h5 mb-3">Telegram</h3>
@@ -130,7 +130,33 @@
               <input class="form-control" type="number" min="0" name="ui_snapshot_cache_stale_after_seconds" value="{{ config.ui.snapshot_cache_stale_after_seconds }}">
             </div>
           </div>
-          <p class="small text-body-secondary mt-2">If both auth fields are set, the web UI uses HTTP Basic Auth. User competency controls whether expert-only pages, including the native config patch editor, appear in the interface. Registration staleness is optional fallback logic for retained MQTT registrations. Snapshot heartbeat actively refreshes each camera preview into the local cache and updates the dashboard badge without removing the camera from the roster. API probe does direct native API refreshes in the background. Set either interval to 0 to disable that background polling. Environment variables <code>HUB_UI_USERNAME</code> and <code>HUB_UI_PASSWORD</code> still override the auth values when present.</p>
+          <p class="small text-body-secondary mt-2">If both auth fields are set, the web UI uses HTTP Basic Auth. User competency controls whether advanced/expert pages appear. Registration staleness is optional fallback logic for retained MQTT registrations. Snapshot heartbeat actively refreshes each camera preview into the local cache. API probe does direct native API refreshes in the background. Set either interval to 0 to disable that background polling. Environment variables <code>HUB_UI_USERNAME</code> and <code>HUB_UI_PASSWORD</code> still override the auth values when present.</p>
+        </section>
+
+        <section class="mb-4">
+          <h3 class="h5 mb-3">Defaults &amp; Pairing</h3>
+          <div class="row g-3">
+            <div class="col-12 col-md-3">
+              <label class="form-label">Default ONVIF username</label>
+              <input class="form-control" type="text" name="defaults_onvif_username" value="{{ (config.defaults.onvif_username if config.defaults is defined else 'thingino') or 'thingino' }}">
+            </div>
+            <div class="col-12 col-md-3">
+              <label class="form-label">Default ONVIF password</label>
+              <input class="form-control" type="password" name="defaults_onvif_password" value="{{ (config.defaults.onvif_password if config.defaults is defined else 'thingino') or 'thingino' }}">
+            </div>
+            <div class="col-12 col-md-3 d-flex align-items-end">
+              <div class="form-check mb-2">
+                <input type="hidden" name="pairing_auto_install_on_registration_present" value="1">
+                <input class="form-check-input" type="checkbox" name="pairing_auto_install_on_registration" id="pairing_auto_install_on_registration" {% if (config.pairing.auto_install_on_registration if config.pairing is defined else true) %}checked{% endif %}>
+                <label class="form-check-label" for="pairing_auto_install_on_registration">Auto-install pairing on MQTT hello</label>
+              </div>
+            </div>
+            <div class="col-12 col-md-3">
+              <label class="form-label">Auto-pair retry (seconds)</label>
+              <input class="form-control" type="number" min="0" name="pairing_auto_install_retry_seconds" value="{{ (config.pairing.auto_install_retry_seconds if config.pairing is defined else 300) or 300 }}">
+            </div>
+          </div>
+          <p class="small text-body-secondary mt-2">ONVIF defaults fill Connect/Enroll forms. Auto-install attempts MQTT pairing when a new camera publishes hello; set retry to how long to wait between failed attempts.</p>
         </section>
 
         <section class="mb-4">
