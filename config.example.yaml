@@ -40,6 +40,8 @@ history:
   recent_actions_limit: 20
   max_action_events_per_camera: 1000
   max_state_samples_per_camera: 5000
+  max_config_snapshots_per_camera: 20
+  config_snapshot_max_age_days: 90
 
 pairing:
   auto_install_on_registration: true

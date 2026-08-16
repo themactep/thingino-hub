@@ -25,6 +25,130 @@ if "paho" not in sys.modules:
 from app.main import Camera, Hub
 
 
+class CredentialsFirstEnrollTests(unittest.TestCase):
+    def test_discover_identity_uses_native_device_id_when_roster_empty(self) -> None:
+        hub = object.__new__(Hub)
+        hub.cameras = {}
+        hub.state_lock = threading.Lock()
+        hub.default_onvif_username = "thingino"
+        hub.default_onvif_password = "thingino"
+
+        class FakeClient:
+            def get_device(self) -> dict[str, str]:
+                return {"id": "0203823f5533", "name": "ptz-cam-01", "hostname": "ptz-cam-01"}
+
+        hub._camera_api_client = lambda camera: FakeClient()  # type: ignore[method-assign]
+        hub._fetch_onvif_device_information = lambda camera: (_ for _ in ()).throw(RuntimeError("skip"))  # type: ignore[method-assign]
+        hub._resolve_enrollment_camera_identity = Hub._resolve_enrollment_camera_identity.__get__(hub, Hub)
+
+        camera_id, name = Hub._discover_enrollment_identity(
+            hub,
+            {"ip": "192.168.140.11", "api_token": "tok"},
+        )
+
+        self.assertEqual(camera_id, "0203823f5533")
+        self.assertEqual(name, "ptz-cam-01")
+
+    def test_discover_identity_prefers_roster_match_over_native_api(self) -> None:
+        hub = object.__new__(Hub)
+        hub.cameras = {
+            "aabbccddeeff": Camera(camera_id="aabbccddeeff", name="front-door", ip="192.168.140.11"),
+        }
+        hub.state_lock = threading.Lock()
+        hub.default_onvif_username = "thingino"
+        hub.default_onvif_password = "thingino"
+        hub._resolve_enrollment_camera_identity = Hub._resolve_enrollment_camera_identity.__get__(hub, Hub)
+        hub._camera_api_client = lambda camera: (_ for _ in ()).throw(AssertionError("native API should not be used"))  # type: ignore[method-assign]
+
+        camera_id, name = Hub._discover_enrollment_identity(hub, {"ip": "192.168.140.11"})
+
+        self.assertEqual(camera_id, "aabbccddeeff")
+        self.assertEqual(name, "front-door")
+
+    def test_discover_identity_falls_back_to_onvif_serial(self) -> None:
+        hub = object.__new__(Hub)
+        hub.cameras = {}
+        hub.state_lock = threading.Lock()
+        hub.default_onvif_username = "thingino"
+        hub.default_onvif_password = "thingino"
+        hub._resolve_enrollment_camera_identity = Hub._resolve_enrollment_camera_identity.__get__(hub, Hub)
+        hub._camera_api_client = lambda camera: (_ for _ in ()).throw(RuntimeError("api down"))  # type: ignore[method-assign]
+        hub._fetch_onvif_device_information = lambda camera: {  # type: ignore[method-assign]
+            "serial_number": "SN123456",
+            "model": "ThinginoCam",
+        }
+
+        camera_id, name = Hub._discover_enrollment_identity(hub, {"ip": "192.168.140.11"})
+
+        self.assertEqual(camera_id, "sn123456")
+        self.assertEqual(name, "ThinginoCam")
+
+    def test_connect_camera_enrolls_from_native_api_without_mqtt_roster(self) -> None:
+        hub = object.__new__(Hub)
+        hub.cameras = {}
+        hub.state_lock = threading.Lock()
+        hub.static_camera_ids = set()
+        hub.default_onvif_username = "thingino"
+        hub.default_onvif_password = "thingino"
+
+        class FakeClient:
+            def get_device(self) -> dict[str, str]:
+                return {"id": "0203823f5533", "name": "ptz-cam-01"}
+
+        hub._camera_api_client = lambda camera: FakeClient()  # type: ignore[method-assign]
+        hub._fetch_onvif_device_information = lambda camera: (_ for _ in ()).throw(RuntimeError("skip"))  # type: ignore[method-assign]
+        hub._resolve_camera_id = Hub._resolve_camera_id.__get__(hub, Hub)
+        hub._resolve_enrollment_camera_identity = Hub._resolve_enrollment_camera_identity.__get__(hub, Hub)
+        hub._discover_enrollment_identity = Hub._discover_enrollment_identity.__get__(hub, Hub)
+        hub._normalized_enrollment_entry = Hub._normalized_enrollment_entry.__get__(hub, Hub)
+
+        saved: list[dict[str, str]] = []
+        hub.enroll_camera = lambda enrollment: saved.append(dict(enrollment)) or {  # type: ignore[method-assign]
+            "camera_id": enrollment["id"],
+            "updated_existing": False,
+        }
+        hub._record_history_action = lambda *args, **kwargs: None  # type: ignore[method-assign]
+
+        result = Hub.connect_camera(
+            hub,
+            {
+                "ip": "192.168.140.11",
+                "api_token": "tok-123",
+                "onvif_username": "thingino",
+                "onvif_password": "thingino",
+            },
+        )
+
+        self.assertEqual(result["camera_id"], "0203823f5533")
+        self.assertEqual(result["api_token"], "tok-123")
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(saved[0]["id"], "0203823f5533")
+        self.assertEqual(saved[0]["api_token"], "tok-123")
+        self.assertEqual(saved[0]["api_base_url"], "https://192.168.140.11:1998/api/v1")
+
+    def test_connect_camera_with_explicit_id_still_requires_mqtt_commands(self) -> None:
+        hub = object.__new__(Hub)
+        hub.cameras = {
+            "cam1": Camera(camera_id="cam1", name="Test Camera", ip="192.168.1.2", mqtt_command_status="offline"),
+        }
+        hub.state_lock = threading.Lock()
+        hub.static_camera_ids = set()
+        hub._resolve_camera_id = Hub._resolve_camera_id.__get__(hub, Hub)
+        hub._camera_accepts_hub_commands = lambda *args, **kwargs: False  # type: ignore[method-assign]
+        hub._camera_hub_command_error = lambda camera_id: "Camera did not respond to hub MQTT commands."  # type: ignore[method-assign]
+
+        with self.assertRaisesRegex(RuntimeError, "Camera did not respond to hub MQTT commands"):
+            Hub.connect_camera(
+                hub,
+                {
+                    "camera_id": "cam1",
+                    "ip": "192.168.1.2",
+                    "onvif_username": "thingino",
+                    "onvif_password": "thingino",
+                },
+            )
+
+
 class PairingInstallTests(unittest.TestCase):
     def test_confirmed_mqtt_install_persists_generated_enrollment(self) -> None:
         hub = object.__new__(Hub)
@@ -33,8 +157,11 @@ class PairingInstallTests(unittest.TestCase):
         hub.static_camera_ids = set()
         hub.config = {"mqtt": {"host": "192.168.1.10", "port": 1883, "username": "", "password": ""}}
         hub.command_reply_timeout_seconds = 5.0
+        hub.history_store = None
         hub._persist_state = lambda: None
         hub._camera_accepts_hub_commands = lambda *args, **kwargs: True
+        hub._schedule_camera_config_backup = lambda *args, **kwargs: None
+        hub._refresh_camera_state_after_pairing = lambda *args, **kwargs: None
 
         saved_enrollments: list[dict[str, str]] = []
         history_actions: list[tuple[str, str, str, str]] = []
@@ -75,6 +202,7 @@ class PairingInstallTests(unittest.TestCase):
         self.assertEqual(saved_enrollments[0]["api_token"], "generated-token")
         self.assertEqual(saved_enrollments[0]["api_base_url"], "https://192.168.1.2:1998/api/v1")
         self.assertEqual(history_actions[-1], ("cam1", "pairing_install", "success", "Agent bootstrap installed"))
+        self.assertFalse(result.get("config_restore_available"))
 
     def test_timed_out_mqtt_install_does_not_persist_generated_enrollment(self) -> None:
         hub = object.__new__(Hub)
@@ -83,8 +211,11 @@ class PairingInstallTests(unittest.TestCase):
         hub.static_camera_ids = set()
         hub.config = {"mqtt": {"host": "192.168.1.10", "port": 1883, "username": "", "password": ""}}
         hub.command_reply_timeout_seconds = 5.0
+        hub.history_store = None
         hub._persist_state = lambda: None
         hub._camera_accepts_hub_commands = lambda *args, **kwargs: True
+        hub._schedule_camera_config_backup = lambda *args, **kwargs: None
+        hub._confirm_pairing_install_via_api = lambda *args, **kwargs: False
 
         saved_enrollments: list[dict[str, str]] = []
 
@@ -116,6 +247,7 @@ class PairingInstallTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "warning")
         self.assertEqual(saved_enrollments, [])
+        self.assertFalse(result.get("config_restore_available"))
 
 
 class StreamControlFormattingTests(unittest.TestCase):
@@ -512,6 +644,109 @@ class MqttRegistrationAndEventTests(unittest.TestCase):
         self.assertEqual(camera.api_version, "0-local")
         self.assertEqual(recorded[0][0], "cam1")
         self.assertEqual(recorded[0][1], "mqtt_state")
+
+
+class NativeConfigSettingsSplitTests(unittest.TestCase):
+    def test_split_stream_osd_into_settings_leaf_patches(self) -> None:
+        hub = object.__new__(Hub)
+        patches, residual = Hub._split_native_config_patch_for_settings(
+            hub,
+            {
+                "image": {"brightness": 128},
+                "action": {"restart_thread": 3},
+                "stream0": {
+                    "fps": 25,
+                    "osd": {
+                        "enabled": True,
+                        "time": {"enabled": True},
+                        "usertext": {"enabled": True, "format": "Bird Box 01"},
+                    },
+                },
+            },
+        )
+
+        self.assertEqual(residual, {})
+        self.assertIn(("image/brightness", {"brightness": 128}), patches)
+        self.assertIn(("streams/0/fps", {"fps": 25}), patches)
+        self.assertIn(("streams/0/osd/enabled", {"enabled": True}), patches)
+        self.assertIn(("streams/0/osd/time/enabled", {"enabled": True}), patches)
+        self.assertIn(("streams/0/osd/usertext/enabled", {"enabled": True}), patches)
+        self.assertIn(("streams/0/osd/usertext/format", {"format": "Bird Box 01"}), patches)
+
+    def test_split_osd_position_via_writable_settings_catalog(self) -> None:
+        hub = object.__new__(Hub)
+        patches, residual = Hub._split_native_config_patch_for_settings(
+            hub,
+            {
+                "stream0": {
+                    "osd": {
+                        "time": {"position": "top_left"},
+                        "usertext": {"position": "bottom_right", "format": "Garden"},
+                        "privacy": {"position": "middle_center", "text": "PRIVATE"},
+                    },
+                },
+            },
+        )
+
+        self.assertEqual(residual, {})
+        self.assertIn(("streams/0/osd/time/position", {"position": "top_left"}), patches)
+        self.assertIn(("streams/0/osd/usertext/position", {"position": "bottom_right"}), patches)
+        self.assertIn(("streams/0/osd/usertext/format", {"format": "Garden"}), patches)
+        self.assertIn(("streams/0/osd/privacy/position", {"position": "middle_center"}), patches)
+        self.assertIn(("streams/0/osd/privacy/text", {"text": "PRIVATE"}), patches)
+
+    def test_writable_settings_catalog_marks_position_for_ui(self) -> None:
+        hub = object.__new__(Hub)
+        catalog = Hub._native_writable_settings_catalog(hub, stream_ids=[0])
+        by_path = {entry["config_path"]: entry for entry in catalog}
+        self.assertEqual(by_path["stream0.osd.time.position"]["settings_path"], "streams/0/osd/time/position")
+        self.assertTrue(by_path["stream0.osd.time.position"]["ui"])
+        self.assertIn("top_left", by_path["stream0.osd.usertext.position"]["enum"])
+
+    def test_patch_camera_config_writes_osd_via_settings_not_omnibus(self) -> None:
+        hub = object.__new__(Hub)
+        hub.state_lock = threading.Lock()
+        hub.cameras = {
+            "cam1": Camera(camera_id="cam1", name="Cam", ip="192.168.1.2", api_base_url="https://192.168.1.2:1998/api/v1"),
+        }
+        calls: list[tuple[str, str, dict]] = []
+
+        class FakeClient:
+            def patch_setting(self, path, payload):
+                calls.append(("setting", path, payload))
+                return {"status": "accepted", "applied": [f"settings.{path.replace('/', '.')}"]}
+
+            def patch_config(self, payload):
+                calls.append(("config", "", payload))
+                return {"status": "accepted", "applied": ["config"]}
+
+        hub._camera_api_client = lambda camera: FakeClient()
+        hub._record_native_action = lambda *args, **kwargs: None
+        hub._record_history_config_changes = lambda *args, **kwargs: None
+        hub._record_optimistic_supported_controls = lambda *args, **kwargs: None
+        hub._schedule_api_refresh = lambda camera_id: False
+        hub._schedule_supported_controls_refresh = lambda camera_id: False
+        hub._schedule_camera_config_backup = lambda *args, **kwargs: None
+
+        result = Hub.patch_camera_config(
+            hub,
+            "cam1",
+            {
+                "stream0": {"osd": {"usertext": {"format": "Bird Box 01"}}},
+                "image": {"anti_flicker": "1"},
+                "action": {"restart_thread": 3},
+            },
+            refresh_after=False,
+        )
+
+        self.assertEqual(result["status"], "accepted")
+        self.assertEqual(
+            calls,
+            [
+                ("setting", "image/anti-flicker", {"anti_flicker": "1"}),
+                ("setting", "streams/0/osd/usertext/format", {"format": "Bird Box 01"}),
+            ],
+        )
 
 
 if __name__ == "__main__":

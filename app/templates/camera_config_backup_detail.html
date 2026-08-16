@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+  {% set page_key = 'config-backups' %}
+  {% set page_label = 'Config Backup' %}
+  {% set page_meta = camera.camera_id ~ ' / #' ~ backup.snapshot_id %}
+  {% include '_camera_page_header.html' %}
+
+  <section class="card shadow-sm mb-4">
+    <div class="card-body">
+      <div class="d-flex flex-column flex-md-row justify-content-between gap-3 mb-3">
+        <div>
+          <h2 class="h4 mb-1">Backup #{{ backup.snapshot_id }}</h2>
+          <p class="text-body-secondary mb-0">{{ backup.recorded_at_label }} · {{ backup.source }}{% if backup.label %} · {{ backup.label }}{% endif %}</p>
+        </div>
+        <div class="d-flex flex-wrap gap-2">
+          <a class="btn btn-outline-secondary" href="{{ url_for('camera_config_backups', camera_id=camera.camera_id) }}">All backups</a>
+          <a class="btn btn-primary" href="{{ url_for('camera_config_backup_restore_preview', camera_id=camera.camera_id, snapshot_id=backup.snapshot_id) }}">Review restore</a>
+          <a class="btn btn-outline-secondary" href="{{ url_for('camera_config_backup_download', camera_id=camera.camera_id, snapshot_id=backup.snapshot_id) }}">Download JSON</a>
+        </div>
+      </div>
+      <div class="row g-3 small mb-3">
+        <div class="col-md-4"><div class="text-body-secondary">Firmware</div><div class="font-monospace text-break">{{ backup.firmware_id or '—' }}</div></div>
+        <div class="col-md-4"><div class="text-body-secondary">Streamer</div><div>{{ backup.streamer or '—' }}</div></div>
+        <div class="col-md-4"><div class="text-body-secondary">Content hash</div><div class="font-monospace text-break">{{ backup.content_hash }}</div></div>
+      </div>
+      <h3 class="h6">Config JSON</h3>
+      <pre class="small bg-body-tertiary border rounded p-3 mb-0"><code>{{ backup.config | tojson(indent=2) }}</code></pre>
+    </div>
+  </section>
+{% endblock %}

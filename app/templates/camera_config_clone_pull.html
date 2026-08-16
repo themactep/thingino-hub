@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block content %}
+  {% set page_key = 'config-backups' %}
+  {% set page_label = 'Clone Pull Preview' %}
+  {% set page_meta = camera.camera_id ~ ' ← ' ~ preview.source_camera_id %}
+  {% include '_camera_page_header.html' %}
+
+  <section class="card shadow-sm mb-4">
+    <div class="card-body">
+      <div class="d-flex flex-column flex-md-row justify-content-between gap-3 mb-3">
+        <div>
+          <h2 class="h4 mb-1">Pull preview</h2>
+          <p class="text-body-secondary mb-0">
+            Source {{ preview.source_name }} ({{ preview.source_camera_id }})
+            · {{ preview.source_kind }}{% if preview.source_snapshot_id %} #{{ preview.source_snapshot_id }}{% endif %}
+            {% if preview.source_recorded_at_label %} · {{ preview.source_recorded_at_label }}{% endif %}
+            <br>
+            {{ preview.source_firmware_id or 'unknown firmware' }} / {{ preview.source_streamer or 'unknown streamer' }}
+            → live {{ preview.live_firmware_id or camera.api_version or 'unknown' }} / {{ preview.live_streamer or camera.api_streamer or 'unknown' }}
+          </p>
+        </div>
+        <a class="btn btn-outline-secondary align-self-start" href="{{ url_for('camera_config_clone', camera_id=camera.camera_id) }}">Cancel</a>
+      </div>
+
+      <div id="clone-pull-progress" class="hub-apply-progress d-none mb-4" role="status" aria-live="polite"></div>
+
+      <div class="row g-3 mb-4">
+        <div class="col-6 col-md-3"><div class="border rounded p-3"><div class="small text-body-secondary">Compatible</div><div class="h4 mb-0">{{ preview.compatible_count }}</div></div></div>
+        <div class="col-6 col-md-3"><div class="border rounded p-3"><div class="small text-body-secondary">Dropped</div><div class="h4 mb-0">{{ preview.dropped_count }}</div></div></div>
+        <div class="col-6 col-md-3"><div class="border rounded p-3"><div class="small text-body-secondary">Conflicts</div><div class="h4 mb-0">{{ preview.conflict_count }}</div></div></div>
+        <div class="col-6 col-md-3"><div class="border rounded p-3"><div class="small text-body-secondary">Secrets skipped</div><div class="h4 mb-0">{{ preview.skipped_secrets_count }}</div></div></div>
+      </div>
+
+      <form id="clone-pull-form" method="post" action="{{ url_for('camera_config_clone_pull_apply', camera_id=camera.camera_id) }}">
+        <input type="hidden" name="source_camera_id" value="{{ preview.source_camera_id }}">
+        <input type="hidden" name="source_kind" value="{{ preview.source_kind }}">
+        {% if preview.source_snapshot_id %}
+        <input type="hidden" name="snapshot_id" value="{{ preview.source_snapshot_id }}">
+        {% endif %}
+
+        {% include '_config_clone_fields.html' %}
+
+        <div class="d-flex flex-wrap gap-2 mt-3">
+          <button class="btn btn-primary" type="submit" name="mode" value="compatible" {% if not preview.compatible_count %}disabled{% endif %}>
+            Apply selected (compatible only)
+          </button>
+          <button class="btn btn-outline-warning" type="submit" name="mode" value="best_effort" {% if not preview.best_effort_flat %}disabled{% endif %}
+            onclick="return confirm('Best-effort may push fields some targets do not advertise cleanly. Continue?');">
+            Apply selected (best effort)
+          </button>
+        </div>
+        <p class="small text-body-secondary mb-0 mt-2">
+          Clone writes one block at a time and confirms each over native settings leaves before continuing.
+        </p>
+      </form>
+    </div>
+  </section>
+  {% set form_id = 'clone-pull-form' %}
+  {% set progress_id = 'clone-pull-progress' %}
+  {% set title = 'Cloning config onto this camera' %}
+  {% include '_hub_ndjson_progress.html' %}
+{% endblock %}

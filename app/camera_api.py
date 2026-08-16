@@ -30,14 +30,34 @@ class CameraApiClient:
     def get_capabilities(self) -> dict[str, Any]:
         return self._json_request("GET", "/capabilities")
 
+    def get_capability_group(self, group: str) -> dict[str, Any]:
+        normalized = str(group or "").strip().strip("/")
+        if not normalized:
+            raise CameraApiError("Capability group is required")
+        return self._json_request("GET", f"/capabilities/{normalized}")
+
     def get_state(self) -> dict[str, Any]:
         return self._json_request("GET", "/state")
 
-    def get_config(self) -> dict[str, Any]:
-        return self._json_request("GET", "/config")
+    def get_runtime(self, resource: str) -> dict[str, Any]:
+        normalized = str(resource or "").strip().strip("/")
+        if not normalized:
+            raise CameraApiError("Runtime resource is required")
+        return self._json_request("GET", f"/runtime/{normalized}")
+
+    def get_config(self, timeout: int | None = None) -> dict[str, Any]:
+        # Full config reads are often slower than narrow /settings leaves.
+        return self._json_request("GET", "/config", timeout=self.timeout if timeout is None else timeout)
 
     def patch_config(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return self._json_request("PATCH", "/config", payload=payload, timeout=self._control_timeout())
+        # Some agent builds return an empty body on successful omnibus PATCH.
+        return self._json_request(
+            "PATCH",
+            "/config",
+            payload=payload,
+            timeout=self._control_timeout(),
+            allow_empty=True,
+        )
 
     def control_service(self, service: str, operation: str) -> dict[str, Any]:
         normalized_service = urllib.parse.quote(str(service or "").strip().lower(), safe="")
@@ -122,13 +142,102 @@ class CameraApiClient:
         return self._json_request("POST", f"/actions/{normalized}", payload=payload, timeout=timeout or self._control_timeout())
 
     def probe(self) -> dict[str, Any]:
-        # /state can be slow on loaded cameras; use the control timeout.
+        # Legacy omnibus probe. Prefer probe_light() for routine hub refreshes.
         t = self._control_timeout()
         return {
             "device": self._json_request("GET", "/device", timeout=t),
             "capabilities": self._json_request("GET", "/capabilities", timeout=t),
             "state": self._json_request("GET", "/state", timeout=t),
         }
+
+    def probe_light(self) -> dict[str, Any]:
+        """Status probe using narrow routes (no /config, /state, or full /capabilities)."""
+        t = self._control_timeout()
+        return {
+            "device": self._json_request("GET", "/device", timeout=t),
+            "system": self.get_runtime("system"),
+            "network": self.get_runtime("network"),
+            "motion": self.get_runtime("motion"),
+            "daynight": self.get_runtime("daynight"),
+            "privacy": self.get_runtime("privacy"),
+        }
+
+    def diagnose_path(self, path: str, *, timeout: int | None = None, allow_empty: bool = False) -> dict[str, Any]:
+        """Probe one API path and classify the outcome without raising."""
+        normalized = "/" + str(path or "").strip().lstrip("/")
+        try:
+            body, headers = self._request("GET", normalized, accept="application/json", timeout=timeout)
+        except CameraApiError as error:
+            detail = str(error)
+            lowered = detail.lower()
+            kind = "error"
+            if "errno 111" in lowered or "connection refused" in lowered:
+                kind = "refused"
+            elif "timed out" in lowered or "timeout" in lowered:
+                kind = "timeout"
+            elif "unauthorized" in lowered or "http 401" in lowered or "http_401" in lowered:
+                kind = "unauthorized"
+            elif "http 403" in lowered or "forbidden" in lowered:
+                kind = "forbidden"
+            elif "empty response" in lowered:
+                kind = "empty"
+            elif "invalid json" in lowered or "non-json" in lowered:
+                kind = "invalid_json"
+            return {"ok": False, "kind": kind, "detail": detail, "path": normalized}
+        if not body.strip():
+            if allow_empty:
+                return {"ok": True, "kind": "empty_ok", "detail": "", "path": normalized, "bytes": 0}
+            return {
+                "ok": False,
+                "kind": "empty",
+                "detail": f"Empty response for {normalized}",
+                "path": normalized,
+                "bytes": 0,
+            }
+        try:
+            decoded = json.loads(body.decode("utf-8"))
+        except Exception as error:
+            return {
+                "ok": False,
+                "kind": "invalid_json",
+                "detail": str(error),
+                "path": normalized,
+                "bytes": len(body),
+            }
+        if not isinstance(decoded, dict):
+            return {
+                "ok": False,
+                "kind": "invalid_json",
+                "detail": f"Unexpected JSON type for {normalized}",
+                "path": normalized,
+                "bytes": len(body),
+            }
+        return {
+            "ok": True,
+            "kind": "ok",
+            "detail": "",
+            "path": normalized,
+            "bytes": len(body),
+            "keys": sorted(str(key) for key in decoded.keys())[:12],
+        }
+
+    def try_get_setting(self, path: str) -> dict[str, Any] | None:
+        try:
+            return self.get_setting(path)
+        except Exception:
+            return None
+
+    def try_get_runtime(self, resource: str) -> dict[str, Any] | None:
+        try:
+            return self.get_runtime(resource)
+        except Exception:
+            return None
+
+    def try_get_capability_group(self, group: str) -> dict[str, Any] | None:
+        try:
+            return self.get_capability_group(group)
+        except Exception:
+            return None
 
     def stream_events(self) -> Any:
         url = f"{self.base_url}/events"
@@ -187,12 +296,28 @@ class CameraApiClient:
         path: str,
         payload: dict[str, Any] | None = None,
         timeout: int | None = None,
+        *,
+        allow_empty: bool = False,
     ) -> dict[str, Any]:
         body, _headers = self._request(method, path, payload=payload, accept="application/json", timeout=timeout)
+        if not body.strip():
+            if allow_empty:
+                return {"status": "accepted"}
+            raise CameraApiError(
+                f"Empty response for {path} — native API returned no JSON "
+                "(agent overloaded, wrong token, or listener not ready)"
+            )
         try:
-            decoded = json.loads(body.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            text = body.decode("utf-8")
+        except UnicodeDecodeError as error:
             raise CameraApiError(f"Invalid JSON response for {path}: {error}") from error
+        try:
+            decoded = json.loads(text)
+        except json.JSONDecodeError as error:
+            preview = " ".join(text.strip().split())
+            if len(preview) > 120:
+                preview = preview[:117] + "..."
+            raise CameraApiError(f"Invalid JSON response for {path}: {error} (body starts: {preview!r})") from error
         if not isinstance(decoded, dict):
             raise CameraApiError(f"Unexpected JSON response for {path}")
         return decoded

@@ -41,17 +41,308 @@
     <a class="btn btn-sm {{ 'btn-primary' if page_key == 'native-actions' else 'btn-outline-secondary' }}" href="{{ url_for('camera_native_actions', camera_id=camera.camera_id) }}">Native Actions</a>
   {% endif %}
     <a class="btn btn-sm {{ 'btn-primary' if page_key == 'history' else 'btn-outline-secondary' }}" href="{{ url_for('camera_history', camera_id=camera.camera_id) }}">History</a>
+    <a class="btn btn-sm {{ 'btn-primary' if page_key == 'config-backups' else 'btn-outline-secondary' }}" href="{{ url_for('camera_config_backups', camera_id=camera.camera_id) }}">Config Backups</a>
   {% if ui_has_expert_access %}
     <a class="btn btn-sm {{ 'btn-danger' if page_key == 'expert' else 'btn-outline-danger' }}" href="{{ url_for('camera_expert_config', camera_id=camera.camera_id) }}">Expert Config</a>
   {% endif %}
   </nav>
+
+  {% if camera.migration_offer %}
+  {% set offer = camera.migration_offer %}
+  <div class="alert alert-info mt-3 shadow-sm" role="status">
+    <div class="fw-semibold mb-1">Camera identity changed (likely after OTA / reflash)</div>
+    <div class="small mb-2">
+      IP <span class="font-monospace">{{ offer.ip }}</span> is shared by
+      stale <strong>{{ offer.stale_name }}</strong>
+      (<span class="font-monospace">{{ offer.stale_camera_id }}</span>)
+      and live <strong>{{ offer.live_name }}</strong>
+      (<span class="font-monospace">{{ offer.live_camera_id }}</span>).
+      Match: {{ offer.match_reasons|join(', ') }}.
+      {% if offer.stale_backup_count %}
+        The stale identity has {{ offer.stale_backup_count }} config backup{{ 's' if offer.stale_backup_count != 1 else '' }}
+        {% if offer.stale_latest_backup %}
+          (latest {{ offer.stale_latest_backup.recorded_at_label or offer.stale_latest_backup.recorded_at }})
+        {% endif %}
+        that can move with the migration.
+      {% else %}
+        No config backups on the stale identity.
+      {% endif %}
+    </div>
+    <form id="camera-migrate-form" action="{{ url_for('camera_migrate_identity', camera_id=camera.camera_id) }}" method="post" class="d-flex flex-wrap gap-2">
+      <input type="hidden" name="from_camera_id" value="{{ offer.stale_camera_id }}">
+      <input type="hidden" name="to_camera_id" value="{{ offer.live_camera_id }}">
+      <input type="hidden" name="restore_latest_backup" id="camera-migrate-restore-flag" value="0">
+      <button class="btn btn-sm btn-primary" type="button" data-bs-toggle="modal" data-bs-target="#cameraMigrateModal" data-migrate-mode="migrate">
+        Migrate to live identity…
+      </button>
+      {% if offer.stale_backup_count %}
+      <button class="btn btn-sm btn-outline-primary" type="button" data-bs-toggle="modal" data-bs-target="#cameraMigrateModal" data-migrate-mode="migrate-restore">
+        Migrate + restore when ready…
+      </button>
+      {% endif %}
+      <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('camera_detail', camera_id=offer.live_camera_id if offer.viewing == 'stale' else offer.stale_camera_id) }}">
+        Open {{ 'live' if offer.viewing == 'stale' else 'stale' }} camera
+      </a>
+    </form>
+  </div>
+
+  <div class="modal fade" id="cameraMigrateModal" tabindex="-1" aria-labelledby="cameraMigrateModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2 class="modal-title fs-5" id="cameraMigrateModalLabel">Before you migrate</h2>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <p class="small text-body-secondary">
+            After a full OTA the camera often loses <strong>MQTT broker settings</strong> and gets a <strong>new MQTT identity</strong>.
+            Migrate only moves hub history/backups. Reconnecting requires MQTT on the camera first, then hub pairing, then config restore.
+          </p>
+
+          <ol class="small mb-0">
+            <li class="mb-3">
+              <div class="fw-semibold">1. On the camera Web UI — MQTT</div>
+              <div class="text-body-secondary mb-1">
+                <strong>Where:</strong>
+                {% if offer.live_web_ui_url %}
+                  <a href="{{ offer.live_web_ui_url }}" target="_blank" rel="noreferrer">{{ offer.live_web_ui_url }}</a>
+                {% else %}
+                  <span class="font-monospace">http://{{ offer.ip }}/</span>
+                {% endif %}
+                → settings for <strong>MQTT</strong> / broker (login usually <span class="font-monospace">thingino / thingino</span>).
+              </div>
+              <div class="text-body-secondary">
+                <strong>What:</strong> enter this hub’s MQTT broker
+                {% if offer.mqtt_broker_host %}
+                  (<span class="font-monospace">{{ offer.mqtt_broker_host }}{% if offer.mqtt_broker_port %}:{{ offer.mqtt_broker_port }}{% endif %}</span>)
+                {% else %}
+                  host/port
+                {% endif %}
+                and credentials, enable the camera MQTT client, then save.
+                <strong>When:</strong> the live camera shows up again on this hub’s MQTT roster.
+                OTA often wipes these settings — this is usually why the camera “disappears” after update.
+              </div>
+            </li>
+            <li class="mb-3">
+              <div class="fw-semibold">2. On this hub — migrate</div>
+              <div class="text-body-secondary">Click Continue below to move history/backups onto the live identity and remove the stale one.</div>
+            </li>
+            <li class="mb-3">
+              <div class="fw-semibold">3. On this hub — Connect, then Install Pairing Bundle</div>
+              <div class="text-body-secondary">
+                Open
+                <a href="{{ url_for('camera_detail', camera_id=offer.live_camera_id) }}">{{ offer.live_name }}</a>
+                and finish Connect → Install Pairing Bundle so the hub can push the native API token over MQTT.
+              </div>
+            </li>
+            <li class="mb-3">
+              <div class="fw-semibold">4. If Native API is still offline — camera Web UI Hub Pairing</div>
+              <div class="text-body-secondary">
+                <strong>Where:</strong> camera → <strong>Services</strong> → <strong>Hub Pairing</strong>.
+                <strong>What:</strong> paste the hub token from Install Pairing Bundle / Show Pairing Details, save, restart the agent.
+                <strong>When:</strong> hub shows Native API <strong>online</strong>.
+              </div>
+            </li>
+            <li class="mb-0">
+              <div class="fw-semibold">5. Restore config</div>
+              <div class="text-body-secondary">
+                Only after API is online: Config Backups → Review restore. Pairing/MQTT secrets are never restored from backups.
+              </div>
+            </li>
+          </ol>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="button" class="btn btn-primary" id="camera-migrate-confirm">Continue with migrate</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function () {
+      const form = document.getElementById("camera-migrate-form");
+      const flag = document.getElementById("camera-migrate-restore-flag");
+      const modalEl = document.getElementById("cameraMigrateModal");
+      const confirmBtn = document.getElementById("camera-migrate-confirm");
+      if (!form || !flag || !modalEl || !confirmBtn) return;
+      let mode = "migrate";
+      modalEl.addEventListener("show.bs.modal", (event) => {
+        const trigger = event.relatedTarget;
+        mode = (trigger && trigger.getAttribute("data-migrate-mode")) || "migrate";
+        flag.value = mode === "migrate-restore" ? "1" : "0";
+        confirmBtn.textContent = mode === "migrate-restore"
+          ? "Migrate, then restore when ready"
+          : "Migrate to live identity";
+      });
+      confirmBtn.addEventListener("click", () => {
+        confirmBtn.disabled = true;
+        form.submit();
+      });
+    })();
+  </script>
+  {% elif camera.identity_conflict_error %}
+  <div class="alert alert-warning mt-3 shadow-sm" role="alert">{{ camera.identity_conflict_error }}</div>
+  {% endif %}
+
+  {% if camera.api_recovery %}
+  {% set recovery = camera.api_recovery %}
+  <div class="alert alert-warning mt-3 shadow-sm" role="status">
+    {% if recovery.phase == 'config_wedge' %}
+    <div class="fw-semibold mb-1">Native API is partially up — omnibus config is wedged</div>
+    <div class="small mb-3">
+      Current block: <span class="font-monospace">{{ recovery.reason }}</span>
+      {% if recovery.api_base_url %}
+        · target <span class="font-monospace">{{ recovery.api_base_url }}</span>
+      {% endif %}
+      {% if recovery.diagnosis %}
+        · live check:
+        listener {{ recovery.diagnosis.listener }},
+        auth {{ recovery.diagnosis.auth }},
+        capabilities {{ recovery.diagnosis.capabilities }},
+        config {{ recovery.diagnosis.config }},
+        settings {{ recovery.diagnosis.settings }}
+      {% endif %}
+    </div>
+    <p class="small mb-3 mb-md-2">
+      MQTT and pairing look fine. The agent is answering some routes, but
+      <span class="font-monospace">GET /config</span> is returning empty/non-JSON (common after a heavy restore).
+      You usually do <strong>not</strong> need to re-pair — restart the hub agent on the camera, wait ~30s, then refresh.
+    </p>
+    <ol class="small mb-3">
+      <li class="mb-2">
+        <div class="fw-semibold">1. Restart the agent on the camera</div>
+        <div class="text-body-secondary">
+          Open <a href="{{ recovery.web_ui_url }}" target="_blank" rel="noreferrer">{{ recovery.web_ui_url }}</a>
+          → restart the hub/agent service (or reboot the camera).
+        </div>
+      </li>
+      <li class="mb-0">
+        <div class="fw-semibold">2. Refresh this page, then restore</div>
+        <div class="text-body-secondary">
+          When Native API shows online, use Config Backups → Review restore.
+          Restore applies via <span class="font-monospace">/settings</span> leaves even if omnibus config is still empty.
+        </div>
+      </li>
+    </ol>
+    <div class="d-flex flex-wrap gap-2">
+      <a class="btn btn-sm btn-outline-secondary" href="{{ recovery.web_ui_url }}" target="_blank" rel="noreferrer">Open camera Web UI</a>
+      <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('camera_config_backups', camera_id=camera.camera_id) }}">Config Backups</a>
+      <button class="btn btn-sm btn-outline-primary" type="button" onclick="window.location.reload()">Refresh status</button>
+    </div>
+    {% elif recovery.phase == 'agent_down' %}
+    <div class="fw-semibold mb-1">Native API listener is down</div>
+    <div class="small mb-3">
+      Current block: <span class="font-monospace">{{ recovery.reason }}</span>
+      {% if recovery.api_base_url %}
+        · target <span class="font-monospace">{{ recovery.api_base_url }}</span>
+      {% endif %}
+    </div>
+    <p class="small mb-3">
+      Nothing is answering on port 1998 yet. Pairing again will not help until the agent is listening —
+      restart the hub agent on the camera (or reboot), then refresh.
+    </p>
+    <div class="d-flex flex-wrap gap-2">
+      <a class="btn btn-sm btn-outline-secondary" href="{{ recovery.web_ui_url }}" target="_blank" rel="noreferrer">Open camera Web UI</a>
+      <button class="btn btn-sm btn-outline-primary" type="button" onclick="window.location.reload()">Refresh status</button>
+    </div>
+    {% elif recovery.phase == 'needs_pairing' %}
+    <div class="fw-semibold mb-1">Native API needs pairing</div>
+    <div class="small mb-3">
+      Current block: <span class="font-monospace">{{ recovery.reason }}</span>
+      {% if recovery.diagnosis %}
+        · live check: listener {{ recovery.diagnosis.listener }}, auth {{ recovery.diagnosis.auth }}
+      {% endif %}
+    </div>
+    <p class="small mb-3">
+      The agent is up, but this hub has no working token for it. Install the pairing bundle (or paste the token under
+      Services → Hub Pairing on the camera).
+    </p>
+    <div class="d-flex flex-wrap gap-2">
+      <a class="btn btn-sm btn-outline-secondary" href="{{ recovery.web_ui_url }}" target="_blank" rel="noreferrer">Open camera Web UI</a>
+      <button class="btn btn-sm btn-outline-primary" type="button" onclick="window.location.reload()">Refresh status</button>
+    </div>
+    {% else %}
+    <div class="fw-semibold mb-1">Native API is not ready yet — follow this order</div>
+    <div class="small mb-3">
+      Current block: <span class="font-monospace">{{ recovery.reason }}</span>
+      {% if recovery.api_base_url %}
+        · target <span class="font-monospace">{{ recovery.api_base_url }}</span>
+      {% endif %}
+      {% if not recovery.present_on_mqtt_broker %}
+        · camera is <strong>not</strong> on the MQTT roster yet — start with camera MQTT settings (step 1).
+      {% endif %}
+    </div>
+    <ol class="small mb-3">
+      <li class="mb-2">
+        <div class="fw-semibold">1. On the camera Web UI — MQTT{% if recovery.present_on_mqtt_broker %} <span class="text-success fw-normal">(on roster)</span>{% endif %}</div>
+        <div class="text-body-secondary mb-1">
+          <strong>Where:</strong>
+          <a href="{{ recovery.web_ui_url }}" target="_blank" rel="noreferrer">{{ recovery.web_ui_url }}</a>
+          → <strong>MQTT</strong> / broker settings (login usually <span class="font-monospace">thingino / thingino</span>).
+        </div>
+        <div class="text-body-secondary">
+          <strong>What:</strong> set broker
+          {% if recovery.mqtt_broker_host %}
+            <span class="font-monospace">{{ recovery.mqtt_broker_host }}{% if recovery.mqtt_broker_port %}:{{ recovery.mqtt_broker_port }}{% endif %}</span>
+          {% else %}
+            host/port
+          {% endif %}
+          and credentials, enable MQTT, save.
+          Full OTA often clears this — re-entering MQTT on the camera is the usual fix when hub pairing alone does nothing.
+          <strong>When:</strong> this camera appears on the hub MQTT roster again.
+        </div>
+      </li>
+      <li class="mb-2">
+        <div class="fw-semibold">2. On this hub — Connect, then Install Pairing Bundle</div>
+        <div class="text-body-secondary">
+          Use Finish Camera Setup below (ONVIF defaults <span class="font-monospace">thingino / thingino</span>).
+          Install Pairing Bundle pushes a hub token over MQTT and restarts the camera agent.
+          {% if recovery.is_paired %}
+            The hub already has a token stored{% if recovery.mqtt_command_status and recovery.mqtt_command_status != 'online' %}, but MQTT commands look <strong>{{ recovery.mqtt_command_status }}</strong>{% endif %}.
+          {% endif %}
+        </div>
+      </li>
+      <li class="mb-2">
+        <div class="fw-semibold">3. If API still fails — camera Web UI Hub Pairing</div>
+        <div class="text-body-secondary mb-1">
+          <strong>Where:</strong> same Web UI → <strong>Services</strong> → <strong>Hub Pairing</strong>.
+        </div>
+        <div class="text-body-secondary mb-1">
+          <strong>What:</strong> paste the hub token from Install Pairing Bundle / Show Pairing Details, save, restart the hub agent (or reboot).
+        </div>
+        <div class="text-body-secondary">
+          <strong>When:</strong> refresh until Native API shows <strong>online</strong>. Do not restore config while you see connection refused.
+        </div>
+      </li>
+      <li class="mb-0">
+        <div class="fw-semibold">4. Then restore config</div>
+        <div class="text-body-secondary">
+          {% if recovery.has_config_backup and recovery.latest_backup and recovery.latest_backup.snapshot_id %}
+            After API is online, open
+            <a href="{{ url_for('camera_config_backup_restore_preview', camera_id=camera.camera_id, snapshot_id=recovery.latest_backup.snapshot_id) }}">Review restore</a>
+            for the migrated backup.
+          {% else %}
+            After API is online, use <strong>Config Backups</strong> → Review restore.
+          {% endif %}
+          Pairing/MQTT secrets are never restored.
+        </div>
+      </li>
+    </ol>
+    <div class="d-flex flex-wrap gap-2">
+      <a class="btn btn-sm btn-outline-secondary" href="{{ recovery.web_ui_url }}" target="_blank" rel="noreferrer">Open camera Web UI</a>
+      <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('camera_config_backups', camera_id=camera.camera_id) }}">Config Backups</a>
+      <button class="btn btn-sm btn-outline-primary" type="button" onclick="window.location.reload()">Refresh status</button>
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
 
   {% if setup_status != 'paired' %}
   {% set mqtt_command_last_error = camera.mqtt_command_last_error if camera.mqtt_command_last_error is defined else '' %}
   {% if setup_status == 'unavailable' %}
   <div class="alert alert-warning mt-3 shadow-sm" role="alert">
     <div class="fw-semibold mb-1">Automatic setup is unavailable for this camera.</div>
-    <div class="small">It published a registration but did not answer the hub MQTT command probe, so it looks like legacy registration only and not an agent-capable camera.</div>
+    <div class="small">It published a registration but is not answering hub MQTT commands after several probes, so the hub cannot push a pairing bundle. Confirm camera MQTT broker settings point at this hub, that the agent is running and subscribed to <span class="font-monospace">cmd</span>, then refresh this page.</div>
   {% if mqtt_command_last_error %}
     <div class="small mt-2 text-body-secondary">Last probe result: {{ mqtt_command_last_error }}</div>
   {% endif %}
@@ -63,14 +354,14 @@
         <div>
           <h2 class="h5 mb-1">Finish Camera Setup</h2>
           {% if setup_status == 'connect' or setup_status == 'verifying' and not registered_on_hub %}
-          <p class="text-body-secondary mb-0">Step 1 of 2: connect this camera to the hub with its ONVIF credentials. After that succeeds, this page will offer the pairing step to restore full native API access.</p>
+          <p class="text-body-secondary mb-0">Step 1 of 2: register this camera with the hub using ONVIF credentials (default <span class="font-monospace">thingino / thingino</span>). After Connect succeeds, Step 2 pushes a hub-issued native API token to the camera over MQTT.</p>
           {% else %}
-          <p class="text-body-secondary mb-0">Step 2 of 2: hub registration already exists, but native API access is still limited. Install the pairing bundle now to restore the native listener and unlock full camera controls.</p>
+          <p class="text-body-secondary mb-0">Step 2 of 2: install the pairing bundle. The hub generates a bearer token, pushes it to the camera over MQTT, and stores the same token locally so native API controls work.</p>
           {% endif %}
         </div>
         <div class="small text-body-secondary">
           <div>Hub registration: {{ 'present' if registered_on_hub else 'missing' }}</div>
-          <div>Pairing token: {{ 'present' if is_paired else 'missing' }}</div>
+          <div>Native API token: {{ 'present' if is_paired else 'missing' }}</div>
         </div>
       </div>
 
@@ -88,23 +379,55 @@
         <div class="col-12 col-md-4 d-grid">
           <button class="btn btn-primary" type="submit">Connect to Hub</button>
         </div>
-      </form>
-      <p class="small text-body-secondary mb-0">The pairing step stays hidden until the hub connection has been created successfully.</p>
-      {% elif setup_status == 'verifying' and not registered_on_hub %}
-      <p class="small text-body-secondary mb-0">Verifying whether this camera accepts hub MQTT commands. Setup actions stay hidden until it answers a probe.</p>
-      {% else %}
-      {% if setup_status == 'pair' %}
-      <form action="{{ url_for('pair_camera', camera_id=camera.camera_id) }}" method="post" class="d-flex flex-wrap gap-2 align-items-center">
-        <input type="hidden" name="redirect_page" value="{{ page_key }}">
-        <button class="btn btn-primary" type="submit">Install Pairing Bundle</button>
-        <span class="small text-body-secondary">Installs the pairing bundle over MQTT and asks the camera to restart its hub agent.</span>
-      </form>
-      {% elif setup_status == 'verifying' %}
-      <p class="small text-body-secondary mb-0">Waiting for MQTT command verification before exposing the pairing step.</p>
+      {% if ui_has_expert_access %}
+        <div class="col-12">
+          <details class="small">
+            <summary class="text-body-secondary">Expert: reuse an existing native API token</summary>
+            <div class="mt-2 col-12 col-lg-6">
+              <label class="form-label" for="connect_api_token">Native API token</label>
+              <input class="form-control font-monospace" id="connect_api_token" type="text" name="api_token" value="{{ camera.override_api_token or '' }}" placeholder="usually leave blank — hub issues this in Step 2" autocomplete="off">
+              <p class="text-body-secondary mb-0 mt-1">Only needed if the camera already has a bearer token you want the hub to keep using instead of installing a new one.</p>
+            </div>
+          </details>
+        </div>
       {% endif %}
+      </form>
+      <p class="small text-body-secondary mb-0">Step 2 (Install Pairing Bundle) stays hidden until Connect succeeds. Normal pairing does not require pasting a token.</p>
+      {% elif setup_status == 'verifying' %}
+      <p class="small text-body-secondary mb-0">Verifying MQTT command capability. The camera registered with the broker; the hub is probing whether it answers commands before showing Connect{% if registered_on_hub %} / Pair{% endif %}. This usually settles within a few seconds — refresh if it sticks.</p>
+      {% elif setup_status == 'pair' %}
+      <form action="{{ url_for('pair_camera', camera_id=camera.camera_id) }}" method="post" class="d-flex flex-column gap-2">
+        <input type="hidden" name="redirect_page" value="{{ page_key }}">
+        <input type="hidden" name="backup_before_present" value="1">
+        <div class="d-flex flex-wrap gap-2 align-items-center">
+          <button class="btn btn-primary" type="submit">Install Pairing Bundle</button>
+          <span class="small text-body-secondary">Installs the pairing bundle over MQTT and asks the camera to restart its hub agent.</span>
+        </div>
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" name="backup_before" id="pair_backup_before" value="on" checked {% if camera.api_status != 'online' %}disabled{% endif %}>
+          <label class="form-check-label small" for="pair_backup_before">Backup config first when native API is online</label>
+        </div>
+      </form>
       {% endif %}
     </div>
   </div>
   {% endif %}
+  {% elif camera.api_recovery and camera.api_recovery.phase == 'needs_pairing' %}
+  <div class="card border-warning-subtle bg-warning-subtle mt-3 shadow-sm">
+    <div class="card-body">
+      <h2 class="h5 mb-2">Install / re-install pairing</h2>
+      <p class="small text-body-secondary mb-3">
+        Live probe says the agent is up, but this hub’s token is missing or rejected.
+        Confirm camera MQTT still points at this hub, then install the pairing bundle
+        or paste the token under Services → Hub Pairing.
+      </p>
+      <form action="{{ url_for('pair_camera', camera_id=camera.camera_id) }}" method="post" class="d-flex flex-wrap gap-2 align-items-center">
+        <input type="hidden" name="redirect_page" value="{{ page_key }}">
+        <input type="hidden" name="backup_before_present" value="1">
+        <button class="btn btn-primary" type="submit">Install Pairing Bundle</button>
+        <a class="btn btn-outline-secondary" href="{{ camera.api_recovery.web_ui_url }}" target="_blank" rel="noreferrer">Open camera Web UI</a>
+      </form>
+    </div>
+  </div>
   {% endif %}
 </section>

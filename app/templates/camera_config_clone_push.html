@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block content %}
+  {% set page_key = 'config-backups' %}
+  {% set page_label = 'Clone Push Preview' %}
+  {% set page_meta = camera.camera_id ~ ' → ' ~ preview.target_count ~ ' target(s)' %}
+  {% include '_camera_page_header.html' %}
+
+  <section class="card shadow-sm mb-4">
+    <div class="card-body">
+      <div class="d-flex flex-column flex-md-row justify-content-between gap-3 mb-3">
+        <div>
+          <h2 class="h4 mb-1">Push preview</h2>
+          <p class="text-body-secondary mb-0">
+            Source {{ preview.source_name }} ({{ preview.source_camera_id }})
+            · {{ preview.source_kind }}{% if preview.source_snapshot_id %} #{{ preview.source_snapshot_id }}{% endif %}
+            {% if preview.source_recorded_at_label %} · {{ preview.source_recorded_at_label }}{% endif %}
+            <br>
+            {{ preview.source_firmware_id or 'unknown firmware' }} / {{ preview.source_streamer or 'unknown streamer' }}
+          </p>
+        </div>
+        <a class="btn btn-outline-secondary align-self-start" href="{{ url_for('camera_config_clone', camera_id=camera.camera_id) }}">Cancel</a>
+      </div>
+
+      <div id="clone-push-progress" class="hub-apply-progress d-none mb-4" role="status" aria-live="polite"></div>
+
+      <h3 class="h6">Targets</h3>
+      <div class="table-responsive mb-4">
+        <table class="table table-sm align-middle">
+          <thead>
+            <tr>
+              <th>Camera</th>
+              <th>Compatible</th>
+              <th>Conflicts</th>
+              <th>Dropped</th>
+              <th>Live streamer</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for target in preview.targets %}
+            <tr>
+              <td>
+                <div>{{ target.target_name }}</div>
+                <div class="small text-body-secondary font-monospace">{{ target.target_camera_id }}</div>
+              </td>
+              <td>{{ target.compatible_count }}</td>
+              <td>{{ target.conflict_count }}</td>
+              <td>{{ target.dropped_count }}</td>
+              <td class="small">{{ target.live_streamer or 'unknown' }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="row g-3 mb-4">
+        <div class="col-6 col-md-3"><div class="border rounded p-3"><div class="small text-body-secondary">Common compatible</div><div class="h4 mb-0">{{ preview.compatible_count }}</div></div></div>
+        <div class="col-6 col-md-3"><div class="border rounded p-3"><div class="small text-body-secondary">Conflicts / partial</div><div class="h4 mb-0">{{ preview.conflict_count }}</div></div></div>
+        <div class="col-6 col-md-3"><div class="border rounded p-3"><div class="small text-body-secondary">Dropped</div><div class="h4 mb-0">{{ preview.dropped_count }}</div></div></div>
+        <div class="col-6 col-md-3"><div class="border rounded p-3"><div class="small text-body-secondary">Secrets skipped</div><div class="h4 mb-0">{{ preview.skipped_secrets_count }}</div></div></div>
+      </div>
+
+      <p class="small text-body-secondary">
+        Checked fields default to the intersection that is compatible on every target.
+        Apply still filters each target individually, so a field only lands where that camera allows it for the chosen mode.
+        Each target is written block-by-block with confirmation before the next.
+      </p>
+
+      <form id="clone-push-form" method="post" action="{{ url_for('camera_config_clone_push_apply', camera_id=camera.camera_id) }}">
+        <input type="hidden" name="source_kind" value="{{ preview.source_kind }}">
+        {% if preview.source_snapshot_id %}
+        <input type="hidden" name="snapshot_id" value="{{ preview.source_snapshot_id }}">
+        {% endif %}
+        {% for target in preview.targets %}
+        <input type="hidden" name="target_camera_id" value="{{ target.target_camera_id }}">
+        {% endfor %}
+
+        {% include '_config_clone_fields.html' %}
+
+        <div class="d-flex flex-wrap gap-2 mt-3">
+          <button class="btn btn-primary" type="submit" name="mode" value="compatible" {% if not preview.compatible_count %}disabled{% endif %}>
+            Push selected (compatible only)
+          </button>
+          <button class="btn btn-outline-warning" type="submit" name="mode" value="best_effort" {% if not preview.best_effort_flat %}disabled{% endif %}
+            onclick="return confirm('Best-effort may push fields some targets do not advertise cleanly. Continue?');">
+            Push selected (best effort)
+          </button>
+        </div>
+      </form>
+    </div>
+  </section>
+  {% set form_id = 'clone-push-form' %}
+  {% set progress_id = 'clone-push-progress' %}
+  {% set title = 'Pushing config to selected cameras' %}
+  {% include '_hub_ndjson_progress.html' %}
+{% endblock %}

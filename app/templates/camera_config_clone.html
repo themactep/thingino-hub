@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+{% block content %}
+  {% set page_key = 'config-backups' %}
+  {% set page_label = 'Config Clone' %}
+  {% set page_meta = camera.camera_id ~ ((' / ' ~ camera.ip) if camera.ip else '') %}
+  {% include '_camera_page_header.html' %}
+
+  <section class="card shadow-sm mb-4">
+    <div class="card-body">
+      <div class="d-flex flex-column flex-md-row justify-content-between gap-3 mb-3">
+        <div>
+          <h2 class="h4 mb-1">Config clone</h2>
+          <p class="text-body-secondary mb-0">
+            Copy streamer settings between cameras. Pull brings another camera’s live config or a backup onto
+            <strong>{{ camera.name }}</strong>; push sends this camera’s live config or a backup to one or more peers.
+            Pairing secrets are never cloned. You pick fields on the preview step.
+            Stream/OSD apply uses the same hub <span class="font-monospace">/settings</span> peel map as restore
+            (Raptor ignores those on omnibus <span class="font-monospace">PATCH /config</span>).
+          </p>
+        </div>
+        <a class="btn btn-outline-secondary align-self-start" href="{{ url_for('camera_config_backups', camera_id=camera.camera_id) }}">Back to backups</a>
+      </div>
+
+      {% if not camera.history_enabled %}
+      <div class="alert alert-warning mb-0">History database is disabled — backup sources need it enabled under Hub Config. Live-to-live clone still works when native API is online.</div>
+      {% endif %}
+    </div>
+  </section>
+
+  <div class="row g-4">
+    <div class="col-lg-6">
+      <section class="card shadow-sm h-100">
+        <div class="card-body">
+          <h3 class="h5">Pull onto this camera</h3>
+          <p class="small text-body-secondary">Choose a source camera, then live config or one of its backups.</p>
+          <form method="get" action="{{ url_for('camera_config_clone_pull_preview', camera_id=camera.camera_id) }}" class="vstack gap-3">
+            <div>
+              <label class="form-label" for="pull-source-camera">Source camera</label>
+              <select class="form-select" id="pull-source-camera" name="source_camera_id" required>
+                <option value="">Select camera…</option>
+                {% for peer in camera.clone_peers %}
+                  <option value="{{ peer.camera_id }}">{{ peer.name }} ({{ peer.camera_id }}){% if peer.api_status != 'online' %} — {{ peer.api_status }}{% endif %}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div>
+              <label class="form-label" for="pull-source-kind">Source</label>
+              <select class="form-select" id="pull-source-kind" name="source_kind">
+                <option value="live">Live config</option>
+                <option value="backup">Backup snapshot</option>
+              </select>
+            </div>
+            <div>
+              <label class="form-label" for="pull-snapshot-id">Backup (when source is Backup)</label>
+              <select class="form-select" id="pull-snapshot-id" name="snapshot_id">
+                <option value="">Select backup after choosing camera…</option>
+                {% for peer in camera.clone_peers %}
+                  {% for backup in peer.config_backups %}
+                    <option value="{{ backup.snapshot_id }}" data-camera="{{ peer.camera_id }}">
+                      {{ peer.name }} — {{ backup.recorded_at_label }} ({{ backup.source }}) {{ backup.label }}
+                    </option>
+                  {% endfor %}
+                {% endfor %}
+              </select>
+            </div>
+            <button class="btn btn-primary align-self-start" type="submit" {% if not camera.clone_peers %}disabled{% endif %}>Review pull</button>
+            {% if not camera.clone_peers %}
+            <p class="small text-body-secondary mb-0">No other cameras are available to pull from.</p>
+            {% endif %}
+          </form>
+        </div>
+      </section>
+    </div>
+
+    <div class="col-lg-6">
+      <section class="card shadow-sm h-100">
+        <div class="card-body">
+          <h3 class="h5">Push from this camera</h3>
+          <p class="small text-body-secondary">Send this camera’s live config or a local backup to one or more peers.</p>
+          <form method="get" action="{{ url_for('camera_config_clone_push_preview', camera_id=camera.camera_id) }}" class="vstack gap-3">
+            <div>
+              <label class="form-label" for="push-source-kind">Source on {{ camera.name }}</label>
+              <select class="form-select" id="push-source-kind" name="source_kind">
+                <option value="live">Live config</option>
+                <option value="backup">Backup snapshot</option>
+              </select>
+            </div>
+            <div>
+              <label class="form-label" for="push-snapshot-id">Backup</label>
+              <select class="form-select" id="push-snapshot-id" name="snapshot_id">
+                <option value="">Select backup…</option>
+                {% for backup in camera.config_backups %}
+                  <option value="{{ backup.snapshot_id }}">{{ backup.recorded_at_label }} ({{ backup.source }}) {{ backup.label }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <fieldset>
+              <legend class="form-label">Target cameras</legend>
+              <div class="border rounded p-3" style="max-height: 14rem; overflow: auto;">
+                {% for peer in camera.clone_peers %}
+                  <div class="form-check">
+                    <input class="form-check-input" type="checkbox" name="target_camera_id" value="{{ peer.camera_id }}" id="push-target-{{ peer.camera_id }}">
+                    <label class="form-check-label" for="push-target-{{ peer.camera_id }}">
+                      {{ peer.name }}
+                      <span class="text-body-secondary small">({{ peer.camera_id }} · {{ peer.api_status }})</span>
+                    </label>
+                  </div>
+                {% else %}
+                  <p class="small text-body-secondary mb-0">No peer cameras available.</p>
+                {% endfor %}
+              </div>
+            </fieldset>
+            <button class="btn btn-primary align-self-start" type="submit" {% if not camera.clone_peers %}disabled{% endif %}>Review push</button>
+          </form>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      const cameraSelect = document.getElementById("pull-source-camera");
+      const snapshotSelect = document.getElementById("pull-snapshot-id");
+      if (!cameraSelect || !snapshotSelect) return;
+      const options = Array.from(snapshotSelect.querySelectorAll("option[data-camera]"));
+      function filterSnapshots() {
+        const cameraId = cameraSelect.value;
+        options.forEach((option) => {
+          const match = !cameraId || option.getAttribute("data-camera") === cameraId;
+          option.hidden = !match;
+          if (!match && option.selected) option.selected = false;
+        });
+      }
+      cameraSelect.addEventListener("change", filterSnapshots);
+      filterSnapshots();
+    })();
+  </script>
+{% endblock %}

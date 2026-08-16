@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block content %}
+  {% set page_key = 'config-backups' %}
+  {% set page_label = 'Config Backups' %}
+  {% set page_meta = camera.camera_id ~ ((' / ' ~ camera.ip) if camera.ip else '') %}
+  {% include '_camera_page_header.html' %}
+
+  <section class="card shadow-sm mb-4">
+    <div class="card-body">
+      {% if camera.config_restore_available and camera.latest_config_backup %}
+      <div class="alert alert-info mb-3" role="status">
+        <div class="fw-semibold mb-1">Restore after reflash or an unwanted change?</div>
+        <div class="small mb-2">
+          Latest backup: {{ camera.latest_config_backup.recorded_at_label or 'unknown time' }}
+          ({{ camera.latest_config_backup.source }}).
+          Review differences against live capabilities before applying. Pairing secrets are never restored.
+        </div>
+        <a class="btn btn-sm btn-primary" href="{{ url_for('camera_config_backup_restore_preview', camera_id=camera.camera_id, snapshot_id=camera.latest_config_backup.snapshot_id) }}">Review restore</a>
+      </div>
+      {% elif camera.last_config_backup_attempt and camera.last_config_backup_attempt.status == 'warning' %}
+      <div class="alert alert-warning mb-3" role="status">
+        <div class="fw-semibold mb-1">Last automatic backup did not store a snapshot</div>
+        <div class="small mb-0">
+          {{ camera.last_config_backup_attempt.recorded_at_label or 'Recently' }}:
+          {{ camera.last_config_backup_attempt.detail or 'unknown error' }}.
+          Settings may still have been applied; use <strong>Backup now</strong> once the camera is idle.
+        </div>
+      </div>
+      {% endif %}
+
+      <div class="d-flex flex-column flex-md-row justify-content-between gap-3 mb-3">
+        <div>
+          <h2 class="h4 mb-1">Config backups</h2>
+          <p class="text-body-secondary mb-0">
+            Full <span class="font-monospace">GET /config</span> snapshots are captured after a successful Settings save
+            (shown as the last stage in apply progress), before repair pairing when the API is online, or when you click Backup now.
+            If capture fails (slow camera / timeout), the apply progress and the warning above say so — settings may still have been applied.
+            Restore is always explicit and never becomes live desired state.
+          </p>
+          <p class="small text-body-secondary mb-0 mt-2">
+            <strong>Restore coverage:</strong> backups store the full config JSON (including stream/OSD when the agent returns them),
+            but apply only writes fields the hub can peel onto native <span class="font-monospace">/settings/...</span> leaves.
+            Raptor’s omnibus <span class="font-monospace">PATCH /config</span> ignores stream/OSD, so those must go through settings paths.
+            The hub peels stream/OSD (including OSD position) from a shared writable-settings catalog onto those leaves.
+            Pairing secrets are never restored.
+          </p>
+        </div>
+        <div class="d-flex flex-wrap gap-2 align-items-start">
+          <a class="btn btn-outline-primary" href="{{ url_for('camera_config_clone', camera_id=camera.camera_id) }}">Clone config</a>
+          <form action="{{ url_for('camera_config_backup_create', camera_id=camera.camera_id) }}" method="post">
+            <input type="hidden" name="label" value="Manual backup">
+            <button class="btn btn-primary" type="submit" {% if camera.api_status != 'online' or not camera.history_enabled %}disabled{% endif %}>Backup now</button>
+          </form>
+        </div>
+      </div>
+
+      <div class="small text-body-secondary mb-3">
+        {% if camera.history_enabled %}
+          Retention: last {{ camera.history_max_config_snapshots_per_camera }} backups
+          {% if camera.history_config_snapshot_max_age_days %}
+            / max age {{ camera.history_config_snapshot_max_age_days }} days
+          {% else %}
+            / age unlimited
+          {% endif %}
+          · SQLite: {{ camera.history_db_path }}
+        {% else %}
+          History database is disabled — enable it under Hub Config to store backups.
+        {% endif %}
+      </div>
+
+      {% if camera.config_backups %}
+      <div class="table-responsive">
+        <table class="table table-sm align-middle mb-0">
+          <thead>
+            <tr>
+              <th>When</th>
+              <th>Source</th>
+              <th>Label</th>
+              <th>Firmware / streamer</th>
+              <th>Size</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+          {% for backup in camera.config_backups %}
+            <tr>
+              <td class="small">{{ backup.recorded_at_label or backup.recorded_at }}</td>
+              <td><span class="badge text-bg-secondary">{{ backup.source }}</span></td>
+              <td class="small">{{ backup.label or '—' }}</td>
+              <td class="small">
+                <div class="font-monospace text-break">{{ backup.firmware_id or 'unknown firmware' }}</div>
+                <div class="text-body-secondary">{{ backup.streamer or 'unknown streamer' }}</div>
+              </td>
+              <td class="small">{{ backup.config_bytes }} B</td>
+              <td class="text-end">
+                <div class="d-flex flex-wrap justify-content-end gap-2">
+                  <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('camera_config_backup_detail', camera_id=camera.camera_id, snapshot_id=backup.snapshot_id) }}">View</a>
+                  <a class="btn btn-sm btn-outline-primary" href="{{ url_for('camera_config_backup_restore_preview', camera_id=camera.camera_id, snapshot_id=backup.snapshot_id) }}">Review restore</a>
+                  <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('camera_config_backup_download', camera_id=camera.camera_id, snapshot_id=backup.snapshot_id) }}">Download</a>
+                  <form action="{{ url_for('camera_config_backup_delete', camera_id=camera.camera_id, snapshot_id=backup.snapshot_id) }}" method="post" onsubmit="return confirm('Delete this config backup?');">
+                    <button class="btn btn-sm btn-outline-danger" type="submit">Delete</button>
+                  </form>
+                </div>
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="border rounded p-4 text-body-secondary">No config backups yet. After a successful settings save the hub captures a snapshot (shown in apply progress); if that fails, use Backup now once the camera is idle and the native API is online.</div>
+      {% endif %}
+    </div>
+  </section>
+{% endblock %}

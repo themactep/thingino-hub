@@ -412,6 +412,8 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "", api
             return url_for("camera_native_actions", camera_id=camera_id)
         if page == "history":
             return url_for("camera_history", camera_id=camera_id)
+        if page == "config-backups":
+            return url_for("camera_config_backups", camera_id=camera_id)
         if page == "expert":
             return url_for("camera_expert_config", camera_id=camera_id)
         return url_for(default_endpoint, camera_id=camera_id)
@@ -494,7 +496,9 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "", api
                 if raw_value is not None:
                     payload[f"native_daynight_schedule_{field}"] = str(raw_value or "").strip()
 
-        stream_field_pattern = re.compile(r"^(stream\d+)_(enabled|audio_enabled|width|height|fps|bitrate|format|mode|osd_enabled|osd_time_enabled|osd_usertext_enabled|osd_usertext_format)$")
+        stream_field_pattern = re.compile(
+            r"^(stream\d+)_(enabled|audio_enabled|width|height|fps|bitrate|format|mode|osd_enabled|osd_time_enabled|osd_time_position|osd_usertext_enabled|osd_usertext_format|osd_usertext_position)$"
+        )
         stream_present_pattern = re.compile(r"^(stream\d+)_(enabled|audio_enabled|osd_enabled|osd_time_enabled|osd_usertext_enabled)_present$")
         stream_updates: dict[str, dict[str, Any]] = {}
         for key in form.keys():
@@ -520,7 +524,7 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "", api
                 if raw_value is None or str(raw_value).strip() == "":
                     continue
                 stream_update[field_name] = str(raw_value).strip()
-            elif field_name == "osd_usertext_format":
+            elif field_name in {"osd_usertext_format", "osd_time_position", "osd_usertext_position"}:
                 stream_update[field_name] = str(raw_value or "")
             else:
                 stream_update[field_name] = str(raw_value or "")
@@ -545,6 +549,13 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "", api
                 stream_name = match.group(1)
                 stream_update = stream_updates.setdefault(stream_name, {"name": stream_name})
                 stream_update["osd_privacy_text"] = str(form.get(form_key) or "")
+                continue
+
+            privacy_position_match = re.match(r"^(stream\d+)_osd_privacy_position$", form_key)
+            if privacy_position_match is not None:
+                stream_name = privacy_position_match.group(1)
+                stream_update = stream_updates.setdefault(stream_name, {"name": stream_name})
+                stream_update["osd_privacy_position"] = str(form.get(form_key) or "")
                 continue
 
             match = privacy_color_pattern.match(form_key)
@@ -660,6 +671,8 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "", api
                 stream_update["osd_privacy_enabled"] = bool(privacy_payload.get("enabled"))
             if "text" in privacy_payload:
                 stream_update["osd_privacy_text"] = str(privacy_payload.get("text") or "")
+            if "position" in privacy_payload:
+                stream_update["osd_privacy_position"] = str(privacy_payload.get("position") or "")
             if "fill_color" in privacy_payload:
                 fill_color_value, fill_alpha = _split_hex_color_alpha(privacy_payload.get("fill_color"))
                 stream_update["osd_privacy_fill_color_value"] = fill_color_value
@@ -972,23 +985,16 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "", api
 
     @app.post("/camera/<camera_id>/hydrate")
     def hydrate_camera_detail(camera_id: str) -> Response:
+        refreshes = {"api": "skipped", "onvif": "skipped"}
         try:
-            api_refresh = hub.queue_camera_api_refresh(camera_id)
+            refreshes = hub.queue_camera_detail_hydration_refresh(camera_id)
         except Exception as error:
-            api_refresh = f"error: {error}"
-
-        try:
-            onvif_refresh = hub.queue_camera_onvif_refresh(camera_id)
-        except Exception as error:
-            onvif_refresh = f"error: {error}"
+            refreshes = {"api": f"error: {error}", "onvif": f"error: {error}"}
 
         payload = {
             "ok": True,
             "camera": camera_detail_payload(camera_id),
-            "refreshes": {
-                "api": api_refresh,
-                "onvif": onvif_refresh,
-            },
+            "refreshes": refreshes,
         }
         return jsonify(payload)
 
@@ -1037,16 +1043,326 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "", api
         )
         return render_template("camera_history.html", camera=camera)
 
+    @app.get("/camera/<camera_id>/config-backups")
+    def camera_config_backups(camera_id: str) -> str:
+        return render_template(
+            "camera_config_backups.html",
+            camera=hub.get_camera_config_backups_for_ui(camera_id),
+        )
+
+    @app.post("/camera/<camera_id>/config-backups")
+    def camera_config_backup_create(camera_id: str) -> Response:
+        redirect_url = url_for("camera_config_backups", camera_id=camera_id)
+        try:
+            result = hub.backup_camera_config(
+                camera_id,
+                source="manual",
+                label=str(request.form.get("label") or "Manual backup").strip(),
+            )
+            detail = str(result.get("status_detail") or "Config backup stored.")
+            return action_response(detail, "success", redirect_url, camera_id=camera_id)
+        except Exception as error:
+            return action_response(str(error), "error", redirect_url, camera_id=camera_id, status_code=400)
+
+    @app.get("/camera/<camera_id>/config-backups/<int:snapshot_id>")
+    def camera_config_backup_detail(camera_id: str, snapshot_id: int) -> str | Response:
+        try:
+            backup = hub.get_camera_config_backup(camera_id, snapshot_id)
+            camera = hub.get_camera_for_ui(camera_id)
+            return render_template(
+                "camera_config_backup_detail.html",
+                camera=camera,
+                backup=backup,
+            )
+        except Exception as error:
+            flash(str(error), "error")
+            return redirect(url_for("camera_config_backups", camera_id=camera_id))
+
+    @app.get("/camera/<camera_id>/config-backups/<int:snapshot_id>/download")
+    def camera_config_backup_download(camera_id: str, snapshot_id: int) -> Response:
+        try:
+            backup = hub.get_camera_config_backup(camera_id, snapshot_id)
+        except Exception as error:
+            flash(str(error), "error")
+            return redirect(url_for("camera_config_backups", camera_id=camera_id))
+        body = json.dumps(
+            {
+                "snapshot_id": backup.get("snapshot_id"),
+                "recorded_at": backup.get("recorded_at"),
+                "source": backup.get("source"),
+                "label": backup.get("label"),
+                "firmware_id": backup.get("firmware_id"),
+                "streamer": backup.get("streamer"),
+                "content_hash": backup.get("content_hash"),
+                "capabilities": backup.get("capabilities") or {},
+                "config": backup.get("config") or {},
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        response = Response(body, mimetype="application/json")
+        response.headers["Content-Disposition"] = (
+            f'attachment; filename="camera-{camera_id}-config-backup-{snapshot_id}.json"'
+        )
+        return response
+
+    @app.get("/camera/<camera_id>/config-backups/<int:snapshot_id>/restore")
+    def camera_config_backup_restore_preview(camera_id: str, snapshot_id: int) -> str | Response:
+        try:
+            preview = hub.preview_camera_config_restore(camera_id, snapshot_id)
+            camera = hub.get_camera_for_ui(camera_id)
+            return render_template(
+                "camera_config_backup_restore.html",
+                camera=camera,
+                preview=preview,
+            )
+        except Exception as error:
+            flash(str(error), "error")
+            return redirect(url_for("camera_config_backups", camera_id=camera_id))
+
+    @app.post("/camera/<camera_id>/config-backups/<int:snapshot_id>/restore")
+    def camera_config_backup_restore(camera_id: str, snapshot_id: int) -> Response:
+        redirect_url = url_for("camera_config_backups", camera_id=camera_id)
+        mode = str(request.form.get("mode") or "compatible").strip().lower()
+        wants_stream = (
+            "application/x-ndjson" in str(request.headers.get("Accept") or "").lower()
+            or str(request.args.get("stream") or request.form.get("stream") or "").strip() in {"1", "true", "yes"}
+        )
+        if wants_stream:
+            def generate():
+                try:
+                    for event in hub.iter_restore_camera_config_backup(camera_id, snapshot_id, mode=mode):
+                        yield json.dumps(event, sort_keys=True) + "\n"
+                except Exception as error:
+                    yield json.dumps(
+                        {
+                            "event": "complete",
+                            "ok": False,
+                            "message": str(error),
+                        },
+                        sort_keys=True,
+                    ) + "\n"
+
+            return Response(
+                generate(),
+                mimetype="application/x-ndjson",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+        try:
+            result = hub.restore_camera_config_backup(camera_id, snapshot_id, mode=mode)
+            return action_response(
+                str(result.get("status_detail") or "Config restore finished."),
+                "success",
+                redirect_url,
+                camera_id=camera_id,
+            )
+        except Exception as error:
+            return action_response(str(error), "error", redirect_url, camera_id=camera_id, status_code=400)
+
+    @app.post("/camera/<camera_id>/config-backups/<int:snapshot_id>/delete")
+    def camera_config_backup_delete(camera_id: str, snapshot_id: int) -> Response:
+        redirect_url = url_for("camera_config_backups", camera_id=camera_id)
+        try:
+            hub.delete_camera_config_backup(camera_id, snapshot_id)
+            return action_response(
+                f"Deleted config backup #{snapshot_id}.",
+                "success",
+                redirect_url,
+                camera_id=camera_id,
+            )
+        except Exception as error:
+            return action_response(str(error), "error", redirect_url, camera_id=camera_id, status_code=400)
+
+    @app.get("/camera/<camera_id>/config-clone")
+    def camera_config_clone(camera_id: str) -> str:
+        return render_template(
+            "camera_config_clone.html",
+            camera=hub.get_camera_config_clone_for_ui(camera_id),
+        )
+
+    @app.get("/camera/<camera_id>/config-clone/pull")
+    def camera_config_clone_pull_preview(camera_id: str) -> str | Response:
+        source_camera_id = str(request.args.get("source_camera_id") or "").strip()
+        source_kind = str(request.args.get("source_kind") or "live").strip().lower() or "live"
+        snapshot_raw = str(request.args.get("snapshot_id") or "").strip()
+        snapshot_id = int(snapshot_raw) if snapshot_raw.isdigit() else None
+        try:
+            if source_kind == "backup" and snapshot_id is None:
+                raise RuntimeError("Select a backup snapshot to pull from")
+            preview = hub.preview_camera_config_clone(
+                camera_id,
+                source_camera_id=source_camera_id,
+                source_kind=source_kind,
+                snapshot_id=snapshot_id,
+            )
+            camera = hub.get_camera_for_ui(camera_id)
+            return render_template(
+                "camera_config_clone_pull.html",
+                camera=camera,
+                preview=preview,
+            )
+        except Exception as error:
+            flash(str(error), "error")
+            return redirect(url_for("camera_config_clone", camera_id=camera_id))
+
+    @app.post("/camera/<camera_id>/config-clone/pull")
+    def camera_config_clone_pull_apply(camera_id: str) -> Response:
+        redirect_url = url_for("camera_config_backups", camera_id=camera_id)
+        source_camera_id = str(request.form.get("source_camera_id") or "").strip()
+        source_kind = str(request.form.get("source_kind") or "live").strip().lower() or "live"
+        snapshot_raw = str(request.form.get("snapshot_id") or "").strip()
+        snapshot_id = int(snapshot_raw) if snapshot_raw.isdigit() else None
+        mode = str(request.form.get("mode") or "compatible").strip().lower()
+        selected_paths = [str(value).strip() for value in request.form.getlist("path") if str(value).strip()]
+        wants_stream = (
+            "application/x-ndjson" in str(request.headers.get("Accept") or "").lower()
+            or str(request.args.get("stream") or request.form.get("stream") or "").strip() in {"1", "true", "yes"}
+        )
+        if wants_stream:
+            def generate():
+                try:
+                    for event in hub.iter_apply_camera_config_clone(
+                        camera_id,
+                        source_camera_id=source_camera_id,
+                        source_kind=source_kind,
+                        snapshot_id=snapshot_id,
+                        selected_paths=selected_paths,
+                        mode=mode,
+                    ):
+                        yield json.dumps(event, sort_keys=True) + "\n"
+                except Exception as error:
+                    yield json.dumps(
+                        {"event": "complete", "ok": False, "message": str(error)},
+                        sort_keys=True,
+                    ) + "\n"
+
+            return Response(
+                generate(),
+                mimetype="application/x-ndjson",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+        try:
+            result = hub.apply_camera_config_clone(
+                camera_id,
+                source_camera_id=source_camera_id,
+                source_kind=source_kind,
+                snapshot_id=snapshot_id,
+                selected_paths=selected_paths,
+                mode=mode,
+            )
+            return action_response(
+                str(result.get("status_detail") or "Config clone finished."),
+                "success",
+                redirect_url,
+                camera_id=camera_id,
+            )
+        except Exception as error:
+            return action_response(str(error), "error", redirect_url, camera_id=camera_id, status_code=400)
+
+    @app.get("/camera/<camera_id>/config-clone/push")
+    def camera_config_clone_push_preview(camera_id: str) -> str | Response:
+        source_kind = str(request.args.get("source_kind") or "live").strip().lower() or "live"
+        snapshot_raw = str(request.args.get("snapshot_id") or "").strip()
+        snapshot_id = int(snapshot_raw) if snapshot_raw.isdigit() else None
+        target_camera_ids = [str(value).strip() for value in request.args.getlist("target_camera_id") if str(value).strip()]
+        try:
+            if source_kind == "backup" and snapshot_id is None:
+                raise RuntimeError("Select a backup snapshot to push")
+            if not target_camera_ids:
+                raise RuntimeError("Select at least one target camera")
+            preview = hub.preview_camera_config_clone_push(
+                camera_id,
+                target_camera_ids=target_camera_ids,
+                source_kind=source_kind,
+                snapshot_id=snapshot_id,
+            )
+            camera = hub.get_camera_for_ui(camera_id)
+            return render_template(
+                "camera_config_clone_push.html",
+                camera=camera,
+                preview=preview,
+            )
+        except Exception as error:
+            flash(str(error), "error")
+            return redirect(url_for("camera_config_clone", camera_id=camera_id))
+
+    @app.post("/camera/<camera_id>/config-clone/push")
+    def camera_config_clone_push_apply(camera_id: str) -> Response:
+        redirect_url = url_for("camera_config_backups", camera_id=camera_id)
+        source_kind = str(request.form.get("source_kind") or "live").strip().lower() or "live"
+        snapshot_raw = str(request.form.get("snapshot_id") or "").strip()
+        snapshot_id = int(snapshot_raw) if snapshot_raw.isdigit() else None
+        mode = str(request.form.get("mode") or "compatible").strip().lower()
+        selected_paths = [str(value).strip() for value in request.form.getlist("path") if str(value).strip()]
+        target_camera_ids = [
+            str(value).strip() for value in request.form.getlist("target_camera_id") if str(value).strip()
+        ]
+        wants_stream = (
+            "application/x-ndjson" in str(request.headers.get("Accept") or "").lower()
+            or str(request.args.get("stream") or request.form.get("stream") or "").strip() in {"1", "true", "yes"}
+        )
+        if wants_stream:
+            def generate():
+                try:
+                    for event in hub.iter_apply_camera_config_clone_push(
+                        camera_id,
+                        target_camera_ids=target_camera_ids,
+                        source_kind=source_kind,
+                        snapshot_id=snapshot_id,
+                        selected_paths=selected_paths,
+                        mode=mode,
+                    ):
+                        yield json.dumps(event, sort_keys=True) + "\n"
+                except Exception as error:
+                    yield json.dumps(
+                        {"event": "complete", "ok": False, "message": str(error)},
+                        sort_keys=True,
+                    ) + "\n"
+
+            return Response(
+                generate(),
+                mimetype="application/x-ndjson",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+        try:
+            result = hub.apply_camera_config_clone_push(
+                camera_id,
+                target_camera_ids=target_camera_ids,
+                source_kind=source_kind,
+                snapshot_id=snapshot_id,
+                selected_paths=selected_paths,
+                mode=mode,
+            )
+            status = "success" if result.get("status") == "success" else "warning"
+            if result.get("status") == "error":
+                status = "error"
+            return action_response(
+                str(result.get("status_detail") or "Config clone push finished."),
+                status,
+                redirect_url,
+                camera_id=camera_id,
+                status_code=400 if status == "error" else 200,
+            )
+        except Exception as error:
+            return action_response(str(error), "error", redirect_url, camera_id=camera_id, status_code=400)
+
     @app.route("/config", methods=["GET", "POST"])
     def config_editor() -> str | Response:
         if request.method == "POST":
             try:
-                new_config = _config_from_form(request.form)
+                existing = hub.export_config()
+                new_config = _config_from_form(request.form, existing=existing)
                 hub.save_config(new_config)
                 if request.form.get("action") == "save-reload":
                     hub.reload_config()
                     flash("Configuration saved and reloaded.", "success")
                 else:
+                    # Keep MQTT/Telegram sockets up, but sync the document so the
+                    # form does not snap back to pre-save in-memory values.
+                    hub.set_config_document(new_config)
                     flash("Configuration saved.", "success")
                 return redirect(url_for("config_editor"))
             except Exception as error:
@@ -1166,6 +1482,7 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "", api
                 payload = api_v2_post(
                     f"/api/v2/cameras/{camera_id}/connect",
                     {
+                        "api_token": str(request.form.get("api_token") or "").strip(),
                         "onvif_username": str(request.form.get("onvif_username") or "").strip(),
                         "onvif_password": str(request.form.get("onvif_password") or ""),
                     },
@@ -1186,6 +1503,7 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "", api
             enrollment = {
                 "camera_id": camera_id,
                 "ip": str(camera.get("ip") or "").strip(),
+                "api_token": str(request.form.get("api_token") or "").strip(),
                 "onvif_username": str(request.form.get("onvif_username") or "").strip(),
                 "onvif_password": str(request.form.get("onvif_password") or ""),
             }
@@ -1268,12 +1586,21 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "", api
     @app.post("/pair/<camera_id>")
     def pair_camera(camera_id: str) -> Response:
         redirect_url = camera_page_redirect(camera_id)
+        backup_before = True
+        if "backup_before_present" in request.form:
+            backup_before = request.form.get("backup_before") == "on"
         if api_v2_enabled:
             try:
-                payload = api_v2_post(f"/api/v2/cameras/{camera_id}/pair")
+                payload = api_v2_post(
+                    f"/api/v2/cameras/{camera_id}/pair",
+                    {"backup_before": backup_before},
+                )
                 result = str(payload.get("result") or "success").strip().lower()
                 category = "warning" if result == "warning" else "success"
                 message = str(payload.get("message") or f"Pairing installed for {camera_id}.")
+                details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
+                if details.get("config_restore_available"):
+                    message = f"{message} Config backup available — review restore from Config Backups."
                 return action_response(
                     message,
                     category,
@@ -1289,10 +1616,13 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "", api
                 "camera_id": camera_id,
                 "ip": str(camera.get("ip") or "").strip(),
             }
-            result = hub.install_pairing_bundle_via_mqtt(enrollment)
+            result = hub.install_pairing_bundle_via_mqtt(enrollment, backup_before=backup_before)
             outcome = pairing_outcome(camera_id, result)
+            message = str(outcome["message"])
+            if result.get("config_restore_available") and result.get("latest_config_backup"):
+                message = f"{message} Config backup available — review restore from Config Backups."
             return action_response(
-                str(outcome["message"]),
+                message,
                 str(outcome["category"]),
                 redirect_url,
                 camera_id=camera_id,
@@ -1556,9 +1886,41 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "", api
     @app.post("/apply-supported-config/<camera_id>")
     def apply_supported_config(camera_id: str) -> Response:
         redirect_url = camera_page_redirect(camera_id)
+        wants_stream = (
+            "application/x-ndjson" in str(request.headers.get("Accept") or "").lower()
+            or str(request.args.get("stream") or request.form.get("stream") or "").strip() in {"1", "true", "yes"}
+        )
         try:
             native_payload = merge_flip_state(camera_id, _supported_config_patch_from_form(request.form))
             send2_payload = _send2_motion_patch_from_form(request.form)
+            if wants_stream:
+                def generate():
+                    try:
+                        for event in hub.iter_apply_supported_config_stages(
+                            camera_id,
+                            native_payload or None,
+                            send2_payload or None,
+                        ):
+                            yield json.dumps(event, sort_keys=True) + "\n"
+                    except Exception as error:
+                        yield json.dumps(
+                            {
+                                "event": "complete",
+                                "ok": False,
+                                "message": f"Settings update failed: {error}",
+                            },
+                            sort_keys=True,
+                        ) + "\n"
+
+                return Response(
+                    generate(),
+                    mimetype="application/x-ndjson",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
+
             results: list[str] = []
             if native_payload:
                 result = hub.patch_camera_config(camera_id, native_payload, refresh_after=False)
@@ -1759,6 +2121,60 @@ def create_web_app(hub: "Hub", ui_username: str = "", ui_password: str = "", api
                 "error",
                 url_for("dashboard"),
                 status_code=500,
+            )
+
+    @app.post("/camera/<camera_id>/migrate")
+    def camera_migrate_identity(camera_id: str) -> Response:
+        from_camera_id = str(request.form.get("from_camera_id") or "").strip()
+        to_camera_id = str(request.form.get("to_camera_id") or "").strip()
+        restore_latest = str(request.form.get("restore_latest_backup") or "").strip() in {"1", "true", "yes", "on"}
+        redirect_url = url_for("camera_detail", camera_id=to_camera_id or camera_id)
+        try:
+            result = hub.migrate_camera_identity(
+                from_camera_id=from_camera_id,
+                to_camera_id=to_camera_id,
+                restore_latest_backup=restore_latest,
+            )
+            message = str(result.get("status_detail") or "Camera identity migrated.")
+            category = "success"
+            live_id = str(result.get("to_camera_id") or to_camera_id)
+            redirect_url = url_for("camera_detail", camera_id=live_id)
+            deferred = result.get("restore_deferred") if isinstance(result.get("restore_deferred"), dict) else None
+            restore = result.get("restore_result") if isinstance(result.get("restore_result"), dict) else None
+            latest = result.get("latest_backup") if isinstance(result.get("latest_backup"), dict) else None
+            snapshot_id = None
+            if deferred and deferred.get("snapshot_id"):
+                snapshot_id = int(deferred["snapshot_id"])
+            elif latest and latest.get("snapshot_id"):
+                snapshot_id = int(latest["snapshot_id"])
+
+            if restore and restore.get("status") == "error":
+                category = "warning"
+                message = str(result.get("status_detail") or message)
+            elif deferred or (result.get("restore_available") and snapshot_id and not (restore and restore.get("status") == "success")):
+                redirect_url = url_for(
+                    "camera_config_backup_restore_preview",
+                    camera_id=live_id,
+                    snapshot_id=snapshot_id,
+                )
+                if deferred:
+                    category = "warning"
+                else:
+                    message = f"{message} Review the migrated backup before applying."
+
+            return action_response(
+                message,
+                category,
+                redirect_url,
+                camera_id=live_id,
+            )
+        except Exception as error:
+            return action_response(
+                str(error),
+                "error",
+                url_for("camera_detail", camera_id=camera_id),
+                camera_id=camera_id,
+                status_code=400,
             )
 
     @app.get("/snapshot/<camera_id>")
@@ -2259,10 +2675,13 @@ def _supported_config_patch_from_form(form: Any) -> dict[str, Any]:
             daynight["schedule"] = schedule
         payload["daynight"] = daynight
 
-    stream_field_pattern = re.compile(r"^(stream\d+)_(enabled|audio_enabled|width|height|fps|bitrate|format|mode|osd_enabled|osd_time_enabled|osd_usertext_enabled|osd_usertext_format)$")
+    stream_field_pattern = re.compile(
+        r"^(stream\d+)_(enabled|audio_enabled|width|height|fps|bitrate|format|mode|osd_enabled|osd_time_enabled|osd_time_position|osd_usertext_enabled|osd_usertext_format|osd_usertext_position)$"
+    )
     stream_present_pattern = re.compile(r"^(stream\d+)_(enabled|audio_enabled|osd_enabled|osd_time_enabled|osd_usertext_enabled)_present$")
     privacy_enabled_present_pattern = re.compile(r"^(stream\d+)_osd_privacy_enabled_present$")
     privacy_text_pattern = re.compile(r"^(stream\d+)_osd_privacy_text$")
+    privacy_position_pattern = re.compile(r"^(stream\d+)_osd_privacy_position$")
     privacy_color_pattern = re.compile(r"^(stream\d+)_osd_privacy_(fill|stroke)_color$")
     stream_payloads: dict[str, dict[str, Any]] = {}
     restart_thread_mask = 0
@@ -2325,6 +2744,22 @@ def _supported_config_patch_from_form(form: Any) -> dict[str, Any]:
                 usertext_payload["format"] = value
                 restart_thread_mask |= thread_video | thread_osd
             continue
+        if field_name == "osd_time_position":
+            value = str(raw_value or "").strip()
+            if value:
+                osd_payload = stream_payload.setdefault("osd", {})
+                time_payload = osd_payload.setdefault("time", {})
+                time_payload["position"] = value
+                restart_thread_mask |= thread_video | thread_osd
+            continue
+        if field_name == "osd_usertext_position":
+            value = str(raw_value or "").strip()
+            if value:
+                osd_payload = stream_payload.setdefault("osd", {})
+                usertext_payload = osd_payload.setdefault("usertext", {})
+                usertext_payload["position"] = value
+                restart_thread_mask |= thread_video | thread_osd
+            continue
         value = str(raw_value or "").strip()
         if value:
             stream_payload[field_name] = value
@@ -2340,6 +2775,18 @@ def _supported_config_patch_from_form(form: Any) -> dict[str, Any]:
             privacy_payload = osd_payload.setdefault("privacy", {})
             privacy_payload["text"] = str(form.get(form_key) or "")
             restart_thread_mask |= thread_video | thread_osd
+            continue
+
+        match = privacy_position_pattern.match(form_key)
+        if match is not None:
+            stream_name = match.group(1)
+            value = str(form.get(form_key) or "").strip()
+            if value:
+                stream_payload = stream_payloads.setdefault(stream_name, {})
+                osd_payload = stream_payload.setdefault("osd", {})
+                privacy_payload = osd_payload.setdefault("privacy", {})
+                privacy_payload["position"] = value
+                restart_thread_mask |= thread_video | thread_osd
             continue
 
         match = privacy_color_pattern.match(form_key)
@@ -2451,7 +2898,11 @@ def _split_hex_color_alpha(raw_value: Any) -> tuple[str, str]:
     return "#000000", "255"
 
 
-def _config_from_form(form: Any, allow_partial: bool = False) -> dict[str, Any]:
+def _config_from_form(
+    form: Any,
+    allow_partial: bool = False,
+    existing: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     config = {
         "telegram": {
             "token": form.get("telegram_token", "").strip(),
@@ -2485,15 +2936,44 @@ def _config_from_form(form: Any, allow_partial: bool = False) -> dict[str, Any]:
             "snapshot_cache_stale_after_seconds": _int_value(form.get("ui_snapshot_cache_stale_after_seconds"), 3600),
             "api_probe_interval_seconds": _int_value(form.get("ui_api_probe_interval_seconds"), 0),
         },
+        "defaults": {
+            "onvif_username": str(form.get("defaults_onvif_username") or "thingino").strip(),
+            "onvif_password": str(form.get("defaults_onvif_password") or "thingino"),
+        },
+        "pairing": {
+            "auto_install_on_registration": (
+                form.get("pairing_auto_install_on_registration") == "on"
+                if "pairing_auto_install_on_registration_present" in form
+                else bool((existing or {}).get("pairing", {}).get("auto_install_on_registration", True))
+            ),
+            "auto_install_retry_seconds": _int_value(
+                form.get("pairing_auto_install_retry_seconds"),
+                int((existing or {}).get("pairing", {}).get("auto_install_retry_seconds", 300) or 300),
+            ),
+        },
         "history": {
             "enabled": form.get("history_enabled") == "on",
             "path": form.get("history_path", "").strip(),
             "recent_actions_limit": _int_value(form.get("history_recent_actions_limit"), 20),
             "max_action_events_per_camera": _int_value(form.get("history_max_action_events_per_camera"), 1000),
             "max_state_samples_per_camera": _int_value(form.get("history_max_state_samples_per_camera"), 5000),
+            "max_config_snapshots_per_camera": _int_value(
+                form.get("history_max_config_snapshots_per_camera"),
+                int((existing or {}).get("history", {}).get("max_config_snapshots_per_camera", 20) or 20),
+            ),
+            "config_snapshot_max_age_days": _int_value(
+                form.get("history_config_snapshot_max_age_days"),
+                int((existing or {}).get("history", {}).get("config_snapshot_max_age_days", 90) or 90),
+            ),
         },
         "cameras": _load_cameras_yaml(form.get("cameras_yaml", "")),
     }
+
+    # Preserve unknown top-level keys the form does not edit (future-proofing).
+    if existing:
+        for key, value in existing.items():
+            if key not in config:
+                config[key] = copy.deepcopy(value)
 
     if allow_partial:
         return config

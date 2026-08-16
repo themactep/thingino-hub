@@ -1,0 +1,153 @@
+{# Shared NDJSON apply progress for restore/clone forms.
+   Expects: form_id, progress_id, title (optional)
+#}
+<script>
+  (() => {
+    const form = document.getElementById({{ form_id|tojson }});
+    const progress = document.getElementById({{ progress_id|tojson }});
+    if (!form || !progress) return;
+    const title = {{ (title or 'Applying changes')|tojson }};
+    const buttons = Array.from(form.querySelectorAll('button[type="submit"]'));
+
+    const setBusy = (busy) => {
+      buttons.forEach((button) => {
+        if (busy) {
+          if (button.disabled) button.setAttribute('data-was-disabled', '1');
+          button.disabled = true;
+        } else if (!button.hasAttribute('data-was-disabled')) {
+          button.disabled = false;
+        }
+      });
+    };
+
+    const showProgress = () => {
+      progress.classList.remove('d-none', 'is-error', 'is-success');
+      progress.classList.add('is-visible');
+      progress.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    };
+
+    const ensureRow = (stageId, label, index, total) => {
+      let row = progress.querySelector(`[data-stage-id="${CSS.escape(stageId)}"]`);
+      if (!row) {
+        row = document.createElement('div');
+        row.className = 'hub-apply-progress-row';
+        row.dataset.state = 'pending';
+        if (stageId) row.setAttribute('data-stage-id', stageId);
+        progress.appendChild(row);
+      }
+      const indexLabel = index && total ? `${index}/${total}` : '';
+      row.innerHTML = `
+        <span class="hub-apply-progress-index">${indexLabel}</span>
+        <span class="hub-apply-progress-message">${label || stageId || ''}</span>
+      `;
+      return row;
+    };
+
+    const renderEvent = (event) => {
+      if (event.event === 'plan' && Array.isArray(event.stages)) {
+        progress.innerHTML = `<div class="fw-semibold mb-2">${title}</div>`;
+        event.stages.forEach((stage) => ensureRow(stage.stage_id, stage.label, stage.index, stage.total));
+        return;
+      }
+      if (event.event === 'camera_plan' && Array.isArray(event.stages)) {
+        if (!progress.querySelector('.fw-semibold')) {
+          progress.innerHTML = `<div class="fw-semibold mb-2">${title}</div>`;
+        }
+        event.stages.forEach((stage) => ensureRow(stage.stage_id, stage.label, stage.index, stage.total));
+        return;
+      }
+      if (event.event === 'camera_start') {
+        if (!progress.querySelector('.fw-semibold')) {
+          progress.innerHTML = `<div class="fw-semibold mb-2">${title}</div>`;
+        }
+        return;
+      }
+      if (event.event === 'complete') {
+        const summary = document.createElement('div');
+        summary.className = 'hub-apply-progress-row';
+        summary.dataset.state = event.ok ? 'done' : 'error';
+        summary.innerHTML = `<span class="hub-apply-progress-message">${event.message || ''}</span>`;
+        progress.appendChild(summary);
+        progress.classList.toggle('is-error', !event.ok);
+        progress.classList.toggle('is-success', !!event.ok);
+        if (event.ok && event.redirect) {
+          window.setTimeout(() => { window.location.href = event.redirect; }, 1200);
+        }
+        return;
+      }
+      const stageId = event.stage_id || '';
+      if (!stageId && event.event !== 'camera_done') return;
+      if (event.event === 'camera_done') {
+        const row = ensureRow(`camera:${event.camera_id || event.label}`, event.label || event.message);
+        row.dataset.state = event.ok ? 'done' : 'error';
+        row.innerHTML = `<span class="hub-apply-progress-message">${event.message || event.label || ''}</span>`;
+        return;
+      }
+      const row = ensureRow(stageId, event.label || event.message, event.index, event.total);
+      const state =
+        event.event === 'stage_error' ? 'error' :
+        event.event === 'stage_done' ? 'done' : 'active';
+      row.dataset.state = state;
+      const indexLabel = event.index && event.total ? `${event.index}/${event.total}` : '';
+      row.innerHTML = `
+        <span class="hub-apply-progress-index">${indexLabel}</span>
+        <span class="hub-apply-progress-message">${event.message || event.label || ''}</span>
+      `;
+    };
+
+    form.addEventListener('submit', async (submitEvent) => {
+      submitEvent.preventDefault();
+      const submitter = submitEvent.submitter;
+      if (!submitter || submitter.disabled) return;
+      const body = new FormData(form);
+      if (submitter.name) body.set(submitter.name, submitter.value);
+      body.set('stream', '1');
+      progress.innerHTML = `<div class="fw-semibold mb-2">Preparing…</div>`;
+      showProgress();
+      setBusy(true);
+      try {
+        const response = await fetch(`${form.action}?stream=1`, {
+          method: 'POST',
+          body,
+          headers: {
+            Accept: 'application/x-ndjson',
+            'X-Requested-With': 'fetch',
+          },
+        });
+        if (!response.ok || !response.body) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let finalEvent = null;
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            const event = JSON.parse(line);
+            renderEvent(event);
+            if (event.event === 'complete') finalEvent = event;
+          }
+        }
+        if (buffer.trim()) {
+          const event = JSON.parse(buffer);
+          renderEvent(event);
+          if (event.event === 'complete') finalEvent = event;
+        }
+        if (!finalEvent || !finalEvent.ok) setBusy(false);
+      } catch (error) {
+        renderEvent({
+          event: 'complete',
+          ok: false,
+          message: `Failed: ${error && error.message ? error.message : error}`,
+        });
+        setBusy(false);
+      }
+    });
+  })();
+</script>

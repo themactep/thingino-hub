@@ -134,6 +134,23 @@ The hub supports:
 - "Stale after" setting controls timeout
 - Camera marked offline if no heartbeat for X seconds
 
+### Config backups and restore
+
+**What is stored:** each backup is a full native `GET /config` snapshot (plus capabilities when available). That usually includes stream settings and nested OSD objects when the camera agent returns them. Pairing secrets are stripped on restore/clone, not from the stored JSON download.
+
+**What restore/clone actually writes:** the hub peels known fields into native `/settings/...` leaf patches, then sends any remaining groups via omnibus `PATCH /config`.
+
+This is a **split limitation**:
+
+| Layer | Role |
+| --- | --- |
+| **Raptor / native API (firmware)** | Omnibus `PATCH /config` only applies a subset of config (mainly image/motion/daynight-style groups). It **ignores stream and OSD** (and some image leaves such as anti-flicker). Those must be written through `/settings/...` paths. |
+| **Hub** | Peels stream/OSD (and some image leaves) onto `/settings` via a shared writable-settings catalog — resolution, fps, bitrate, format, mode, audio, OSD enable/time/usertext/privacy (including **position**), fonts/colors/logo where present in the backup. Restore, clone, and Settings share that catalog so UI and apply stay aligned. |
+
+So: Raptor forces leaf writes for stream/OSD; the hub catalog is the map of which leaves Settings/restore/clone will write. Extending coverage means adding catalog entries (and optional Settings UI), not expecting omnibus `/config` to round-trip OSD.
+
+Restore also refuses to apply while live capabilities/config cannot be read (empty/non-JSON `/config` after OTA). Apply is staged: the hub writes one block at a time (imaging, streams, …), confirms each over narrow `/settings` leaves with backoff, shows a progress checklist, then captures a post-restore backup. Config clone (pull/push) uses the same staged confirm + progress flow.
+
 ---
 
 ## Troubleshooting

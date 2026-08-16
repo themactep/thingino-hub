@@ -1,0 +1,128 @@
+{% set selected = selected_paths if selected_paths is defined else (preview.default_selected_paths or []) %}
+
+<div class="d-flex flex-wrap gap-2 mb-3">
+  <button class="btn btn-sm btn-outline-secondary" type="button" data-clone-select="compatible">Select compatible</button>
+  <button class="btn btn-sm btn-outline-secondary" type="button" data-clone-select="none">Clear</button>
+</div>
+
+{% if preview.skipped_secrets %}
+<h3 class="h6">Skipped secrets / pairing</h3>
+<ul class="small mb-3">
+  {% for item in preview.skipped_secrets %}
+    <li><span class="font-monospace">{{ item.path }}</span> — {{ item.reason }}</li>
+  {% endfor %}
+</ul>
+{% endif %}
+
+{% if preview.fields_by_group %}
+{% for group, buckets in preview.fields_by_group|dictsort %}
+<details class="border rounded mb-2" open>
+  <summary class="px-3 py-2">
+    <span class="d-inline-flex align-items-center gap-2" onclick="event.preventDefault(); event.stopPropagation();">
+      <input class="form-check-input clone-group m-0" type="checkbox" data-group="{{ group }}" id="clone-group-{{ group }}" title="Select all fields in {{ group }}">
+      <label class="form-check-label fw-semibold mb-0" for="clone-group-{{ group }}">{{ group }}</label>
+    </span>
+    <span class="small text-body-secondary fw-normal ms-1">
+      · {{ buckets.compatible|length }} compatible
+      {% if buckets.conflicts %}· {{ buckets.conflicts|length }} conflicts{% endif %}
+      {% if buckets.dropped %}· {{ buckets.dropped|length }} dropped{% endif %}
+    </span>
+  </summary>
+  <div class="px-3 pb-3">
+    {% for item in buckets.compatible %}
+      <div class="form-check">
+        <input class="form-check-input clone-field" type="checkbox" name="path" value="{{ item.path }}"
+               id="clone-{{ group }}-c-{{ loop.index }}" data-status="compatible" data-group="{{ group }}"
+               {% if item.path in selected %}checked{% endif %}>
+        <label class="form-check-label small" for="clone-{{ group }}-c-{{ loop.index }}">
+          <span class="font-monospace">{{ item.path }}</span>
+          <span class="text-body-secondary">— {{ item.summary }}</span>
+        </label>
+      </div>
+    {% endfor %}
+    {% for item in buckets.conflicts %}
+      <div class="form-check">
+        <input class="form-check-input clone-field" type="checkbox" name="path" value="{{ item.path }}"
+               id="clone-{{ group }}-x-{{ loop.index }}" data-status="conflict" data-group="{{ group }}"
+               {% if item.path in selected %}checked{% endif %}>
+        <label class="form-check-label small" for="clone-{{ group }}-x-{{ loop.index }}">
+          <span class="font-monospace">{{ item.path }}</span>
+          <span class="badge text-bg-warning">conflict</span>
+          <span class="text-body-secondary">— {{ item.reason }}</span>
+        </label>
+      </div>
+    {% endfor %}
+    {% for item in buckets.dropped %}
+      <div class="form-check">
+        <input class="form-check-input clone-field" type="checkbox" name="path" value="{{ item.path }}"
+               id="clone-{{ group }}-d-{{ loop.index }}" data-status="dropped" data-group="{{ group }}"
+               {% if item.path in selected %}checked{% endif %}>
+        <label class="form-check-label small" for="clone-{{ group }}-d-{{ loop.index }}">
+          <span class="font-monospace">{{ item.path }}</span>
+          <span class="badge text-bg-secondary">dropped</span>
+          <span class="text-body-secondary">— {{ item.reason }}</span>
+        </label>
+      </div>
+    {% endfor %}
+  </div>
+</details>
+{% endfor %}
+{% else %}
+<div class="border rounded p-3 text-body-secondary">No cloneable fields in this source.</div>
+{% endif %}
+
+<script>
+  (function () {
+    const fields = () => Array.from(document.querySelectorAll("input.clone-field"));
+    const groupBoxes = () => Array.from(document.querySelectorAll("input.clone-group"));
+
+    function fieldsForGroup(group) {
+      return fields().filter((input) => input.getAttribute("data-group") === group);
+    }
+
+    function syncGroupBox(groupBox) {
+      const group = groupBox.getAttribute("data-group");
+      const matches = fieldsForGroup(group);
+      const checked = matches.filter((input) => input.checked);
+      groupBox.checked = matches.length > 0 && checked.length === matches.length;
+      groupBox.indeterminate = checked.length > 0 && checked.length < matches.length;
+    }
+
+    function syncAllGroups() {
+      groupBoxes().forEach(syncGroupBox);
+    }
+
+    document.querySelectorAll("[data-clone-select]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const mode = button.getAttribute("data-clone-select");
+        if (mode === "compatible") {
+          fields().forEach((input) => {
+            input.checked = input.getAttribute("data-status") === "compatible";
+          });
+        } else if (mode === "none") {
+          fields().forEach((input) => { input.checked = false; });
+        }
+        syncAllGroups();
+      });
+    });
+
+    groupBoxes().forEach((groupBox) => {
+      groupBox.addEventListener("click", (event) => {
+        event.stopPropagation();
+      });
+      groupBox.addEventListener("change", () => {
+        const group = groupBox.getAttribute("data-group");
+        fieldsForGroup(group).forEach((input) => {
+          input.checked = groupBox.checked;
+        });
+        groupBox.indeterminate = false;
+      });
+    });
+
+    fields().forEach((input) => {
+      input.addEventListener("change", syncAllGroups);
+    });
+
+    syncAllGroups();
+  })();
+</script>

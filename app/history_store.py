@@ -2,6 +2,7 @@ import json
 import logging
 import sqlite3
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -10,10 +11,20 @@ LOG = logging.getLogger("telegrambothub.history")
 
 
 class HistoryStore:
-    def __init__(self, db_path: str, *, max_action_events_per_camera: int = 1000, max_state_samples_per_camera: int = 5000) -> None:
+    def __init__(
+        self,
+        db_path: str,
+        *,
+        max_action_events_per_camera: int = 1000,
+        max_state_samples_per_camera: int = 5000,
+        max_config_snapshots_per_camera: int = 20,
+        config_snapshot_max_age_days: int = 90,
+    ) -> None:
         self.db_path = Path(db_path)
         self.max_action_events_per_camera = max(1, int(max_action_events_per_camera))
         self.max_state_samples_per_camera = max(1, int(max_state_samples_per_camera))
+        self.max_config_snapshots_per_camera = max(1, int(max_config_snapshots_per_camera))
+        self.config_snapshot_max_age_days = max(0, int(config_snapshot_max_age_days))
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self._conn = sqlite3.connect(self.db_path, timeout=5, check_same_thread=False)
@@ -79,6 +90,22 @@ class HistoryStore:
 
                 CREATE INDEX IF NOT EXISTS idx_config_changes_camera_time
                 ON config_changes(camera_id, recorded_at DESC, id DESC);
+
+                CREATE TABLE IF NOT EXISTS config_snapshots (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    recorded_at INTEGER NOT NULL,
+                    camera_id TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    label TEXT NOT NULL DEFAULT '',
+                    firmware_id TEXT NOT NULL DEFAULT '',
+                    streamer TEXT NOT NULL DEFAULT '',
+                    capabilities_json TEXT NOT NULL,
+                    config_json TEXT NOT NULL,
+                    content_hash TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_config_snapshots_camera_time
+                ON config_snapshots(camera_id, recorded_at DESC, id DESC);
                 """
             )
             self._ensure_column("state_samples", "api_status", "TEXT")
@@ -91,6 +118,40 @@ class HistoryStore:
             self._ensure_column("state_samples", "ip", "TEXT")
             self._ensure_column("state_samples", "has_cached_snapshot", "INTEGER")
             self._conn.commit()
+
+    def rebind_camera_id(self, old_camera_id: str, new_camera_id: str) -> dict[str, int]:
+        """Move history rows from one camera identity to another (OTA / reflash)."""
+        old_id = str(old_camera_id or "").strip().lower()
+        new_id = str(new_camera_id or "").strip().lower()
+        if not old_id or not new_id:
+            raise ValueError("old_camera_id and new_camera_id are required")
+        if old_id == new_id:
+            return {
+                "action_events": 0,
+                "state_samples": 0,
+                "config_changes": 0,
+                "config_snapshots": 0,
+            }
+
+        tables = (
+            "action_events",
+            "state_samples",
+            "config_changes",
+            "config_snapshots",
+        )
+        counts: dict[str, int] = {}
+        with self._lock:
+            for table in tables:
+                cursor = self._conn.execute(
+                    f"UPDATE {table} SET camera_id = ? WHERE camera_id = ?",
+                    (new_id, old_id),
+                )
+                counts[table] = int(cursor.rowcount or 0)
+            self._prune_action_events(new_id)
+            self._prune_state_samples(new_id)
+            self._prune_config_snapshots(new_id)
+            self._conn.commit()
+        return counts
 
     def _ensure_column(self, table_name: str, column_name: str, column_type: str) -> None:
         columns = {
@@ -244,6 +305,128 @@ class HistoryStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def record_config_snapshot(
+        self,
+        *,
+        recorded_at: int,
+        camera_id: str,
+        source: str,
+        label: str = "",
+        firmware_id: str = "",
+        streamer: str = "",
+        capabilities: dict[str, Any] | None = None,
+        config: dict[str, Any] | None = None,
+        content_hash: str = "",
+        skip_duplicate: bool = True,
+    ) -> dict[str, Any]:
+        capabilities_json = json.dumps(capabilities or {}, sort_keys=True)
+        config_json = json.dumps(config or {}, sort_keys=True)
+        normalized_hash = str(content_hash or "").strip()
+        if not normalized_hash:
+            normalized_hash = str(hash((capabilities_json, config_json)))
+
+        with self._lock:
+            if skip_duplicate:
+                newest = self._conn.execute(
+                    """
+                    SELECT id, content_hash
+                    FROM config_snapshots
+                    WHERE camera_id = ?
+                    ORDER BY recorded_at DESC, id DESC
+                    LIMIT 1
+                    """,
+                    (camera_id,),
+                ).fetchone()
+                if newest is not None and str(newest["content_hash"] or "") == normalized_hash:
+                    return {
+                        "stored": False,
+                        "skipped_duplicate": True,
+                        "snapshot_id": int(newest["id"]),
+                        "content_hash": normalized_hash,
+                    }
+
+            cursor = self._conn.execute(
+                """
+                INSERT INTO config_snapshots (
+                    recorded_at, camera_id, source, label, firmware_id, streamer,
+                    capabilities_json, config_json, content_hash
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    recorded_at,
+                    camera_id,
+                    source,
+                    str(label or ""),
+                    str(firmware_id or ""),
+                    str(streamer or ""),
+                    capabilities_json,
+                    config_json,
+                    normalized_hash,
+                ),
+            )
+            snapshot_id = int(cursor.lastrowid)
+            self._prune_config_snapshots(camera_id)
+            self._conn.commit()
+            return {
+                "stored": True,
+                "skipped_duplicate": False,
+                "snapshot_id": snapshot_id,
+                "content_hash": normalized_hash,
+            }
+
+    def list_config_snapshots(self, camera_id: str, limit: int = 50) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT id, recorded_at, source, label, firmware_id, streamer, content_hash,
+                       length(config_json) AS config_bytes,
+                       length(capabilities_json) AS capabilities_bytes
+                FROM config_snapshots
+                WHERE camera_id = ?
+                ORDER BY recorded_at DESC, id DESC
+                LIMIT ?
+                """,
+                (camera_id, max(1, int(limit))),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_config_snapshot(self, camera_id: str, snapshot_id: int) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT id, recorded_at, camera_id, source, label, firmware_id, streamer,
+                       capabilities_json, config_json, content_hash
+                FROM config_snapshots
+                WHERE camera_id = ? AND id = ?
+                """,
+                (camera_id, int(snapshot_id)),
+            ).fetchone()
+        if row is None:
+            return None
+        entry = dict(row)
+        try:
+            entry["capabilities"] = json.loads(str(entry.pop("capabilities_json") or "{}"))
+        except json.JSONDecodeError:
+            entry["capabilities"] = {}
+        try:
+            entry["config"] = json.loads(str(entry.pop("config_json") or "{}"))
+        except json.JSONDecodeError:
+            entry["config"] = {}
+        return entry
+
+    def delete_config_snapshot(self, camera_id: str, snapshot_id: int) -> bool:
+        with self._lock:
+            cursor = self._conn.execute(
+                "DELETE FROM config_snapshots WHERE camera_id = ? AND id = ?",
+                (camera_id, int(snapshot_id)),
+            )
+            self._conn.commit()
+            return cursor.rowcount > 0
+
+    def latest_config_snapshot_summary(self, camera_id: str) -> dict[str, Any] | None:
+        rows = self.list_config_snapshots(camera_id, limit=1)
+        return rows[0] if rows else None
+
     def record_state_sample(
         self,
         *,
@@ -330,6 +513,31 @@ class HistoryStore:
               )
             """,
             (camera_id, camera_id, self.max_action_events_per_camera),
+        )
+
+    def _prune_config_snapshots(self, camera_id: str) -> None:
+        if self.config_snapshot_max_age_days > 0:
+            cutoff = int(time.time()) - (self.config_snapshot_max_age_days * 86400)
+            self._conn.execute(
+                """
+                DELETE FROM config_snapshots
+                WHERE camera_id = ? AND recorded_at < ?
+                """,
+                (camera_id, cutoff),
+            )
+        self._conn.execute(
+            """
+            DELETE FROM config_snapshots
+            WHERE camera_id = ?
+              AND id NOT IN (
+                  SELECT id
+                  FROM config_snapshots
+                  WHERE camera_id = ?
+                  ORDER BY recorded_at DESC, id DESC
+                  LIMIT ?
+              )
+            """,
+            (camera_id, camera_id, self.max_config_snapshots_per_camera),
         )
 
     def _bool_to_int(self, value: Any) -> int | None:

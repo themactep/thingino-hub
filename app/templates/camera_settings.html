@@ -8,15 +8,16 @@
   <section class="card shadow-sm">
     <div class="card-body">
       <h2 class="card-title h4">Long-Term Camera Settings</h2>
-      <p class="text-body-secondary">Persistent imaging, day/night, and stream configuration lives here so the main camera page stays focused on preview and short-lived actions. Motion detection and notification routing now live on the Send2 page.</p>
+      <p class="text-body-secondary">Persistent imaging, day/night, and stream configuration lives here so the main camera page stays focused on preview and short-lived actions. Motion detection and notification routing now live on the Send2 page. A successful save also captures a config backup (last stage in the progress panel); if that stage fails, check Config Backups.</p>
     {% if camera.identity_conflict_error %}
       <div class="alert alert-warning" role="alert">{{ camera.identity_conflict_error }}</div>
     {% endif %}
     {% if camera.native_controls_error %}
       <div class="alert alert-warning" role="alert">Could not load live camera config: {{ camera.native_controls_error }}</div>
     {% endif %}
-      <form action="{{ url_for('apply_supported_config', camera_id=camera.camera_id) }}" method="post" class="mb-0">
+      <form id="long-term-settings-form" action="{{ url_for('apply_supported_config', camera_id=camera.camera_id) }}" method="post" class="mb-0">
         <input type="hidden" name="redirect_page" value="settings">
+        <div id="long-term-settings-progress" class="hub-apply-progress d-none" role="status" aria-live="polite"></div>
         <fieldset {% if not camera.native_controls_available and not camera.native_send2_available %}disabled{% endif %}>
           <div class="row g-4 mb-4">
             <div class="col-12 col-xl-4">
@@ -137,7 +138,7 @@
 
         {% set privacy = namespace(supported=false) %}
         {% for stream in camera.native_stream_controls %}
-          {% if stream.osd_privacy_enabled_supported or stream.osd_privacy_text_supported or stream.osd_privacy_fill_color_supported or stream.osd_privacy_stroke_color_supported %}
+          {% if stream.osd_privacy_enabled_supported or stream.osd_privacy_text_supported or stream.osd_privacy_position_supported or stream.osd_privacy_fill_color_supported or stream.osd_privacy_stroke_color_supported %}
             {% set privacy.supported = true %}
           {% endif %}
         {% endfor %}
@@ -148,7 +149,7 @@
               <p class="text-body-secondary mb-3">Configure the dedicated privacy OSD layers for each stream. This mirrors the camera web UI and applies through the native API.</p>
               <div class="row g-3">
               {% for stream in camera.native_stream_controls %}
-                {% if stream.osd_privacy_enabled_supported or stream.osd_privacy_text_supported or stream.osd_privacy_fill_color_supported or stream.osd_privacy_stroke_color_supported %}
+                {% if stream.osd_privacy_enabled_supported or stream.osd_privacy_text_supported or stream.osd_privacy_position_supported or stream.osd_privacy_fill_color_supported or stream.osd_privacy_stroke_color_supported %}
                 <div class="col-12 col-xl-6">
                   <div class="border rounded p-3 h-100">
                     <h4 class="h6 mb-1">{{ stream.label }}</h4>
@@ -163,6 +164,15 @@
                     <div class="mb-3">
                       <label class="form-label" for="{{ stream.name }}_osd_privacy_text">Overlay text</label>
                       <input class="form-control" id="{{ stream.name }}_osd_privacy_text" type="text" name="{{ stream.name }}_osd_privacy_text" maxlength="160" value="{{ stream.osd_privacy_text }}" placeholder="PRIVACY ENABLED" {% if not stream.osd_privacy_text_supported %}disabled{% endif %}>
+                    </div>
+                    <div class="mb-3">
+                      <label class="form-label" for="{{ stream.name }}_osd_privacy_position">Position</label>
+                      <select class="form-select" id="{{ stream.name }}_osd_privacy_position" name="{{ stream.name }}_osd_privacy_position" {% if not stream.osd_privacy_position_supported %}disabled{% endif %}>
+                        <option value="">—</option>
+                        {% for choice in camera.osd_position_choices %}
+                          <option value="{{ choice }}" {% if stream.osd_privacy_position == choice %}selected{% endif %}>{{ choice.replace('_', ' ')|title }}</option>
+                        {% endfor %}
+                      </select>
                     </div>
                     <div class="row g-3">
                       <div class="col-12 col-sm-6">
@@ -267,6 +277,24 @@
                     <label class="form-label" for="{{ stream.name }}_osd_usertext_format">Label text</label>
                     <input class="form-control" id="{{ stream.name }}_osd_usertext_format" type="text" name="{{ stream.name }}_osd_usertext_format" value="{{ stream.osd_usertext_format }}" {% if not stream.osd_usertext_format_supported %}disabled{% endif %}>
                   </div>
+                  <div class="col-12 col-md-6">
+                    <label class="form-label" for="{{ stream.name }}_osd_time_position">Time position</label>
+                    <select class="form-select" id="{{ stream.name }}_osd_time_position" name="{{ stream.name }}_osd_time_position" {% if not stream.osd_time_position_supported %}disabled{% endif %}>
+                      <option value="">—</option>
+                      {% for choice in camera.osd_position_choices %}
+                        <option value="{{ choice }}" {% if stream.osd_time_position == choice %}selected{% endif %}>{{ choice.replace('_', ' ')|title }}</option>
+                      {% endfor %}
+                    </select>
+                  </div>
+                  <div class="col-12 col-md-6">
+                    <label class="form-label" for="{{ stream.name }}_osd_usertext_position">Label position</label>
+                    <select class="form-select" id="{{ stream.name }}_osd_usertext_position" name="{{ stream.name }}_osd_usertext_position" {% if not stream.osd_usertext_position_supported %}disabled{% endif %}>
+                      <option value="">—</option>
+                      {% for choice in camera.osd_position_choices %}
+                        <option value="{{ choice }}" {% if stream.osd_usertext_position == choice %}selected{% endif %}>{{ choice.replace('_', ' ')|title }}</option>
+                      {% endfor %}
+                    </select>
+                  </div>
                 </div>
               </div>
             </div>
@@ -275,10 +303,138 @@
         {% endif %}
 
           <div class="d-flex flex-wrap gap-2">
-            <button class="btn btn-primary" type="submit">Save Long-Term Settings</button>
+            <button class="btn btn-primary" type="submit" id="long-term-settings-submit" data-idle-label="Save Long-Term Settings" data-busy-label="Applying Long-Term Settings">Save Long-Term Settings</button>
           </div>
         </fieldset>
       </form>
     </div>
   </section>
+  <script>
+    (() => {
+      const form = document.getElementById('long-term-settings-form');
+      const button = document.getElementById('long-term-settings-submit');
+      const progress = document.getElementById('long-term-settings-progress');
+      if (!form || !button || !progress) return;
+
+      const idleLabel = button.getAttribute('data-idle-label') || button.textContent;
+      const busyLabel = button.getAttribute('data-busy-label') || 'Applying Long-Term Settings';
+
+      const setBusy = (busy) => {
+        button.disabled = busy;
+        button.textContent = busy ? busyLabel : idleLabel;
+      };
+
+      const showProgress = () => {
+        progress.classList.remove('d-none', 'is-error', 'is-success');
+        progress.classList.add('is-visible');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        progress.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      };
+
+      const renderEvent = (event) => {
+        if (event.event === 'plan' && Array.isArray(event.stages)) {
+          progress.innerHTML = '<div class="fw-semibold mb-2">Applying long-term settings</div>';
+          event.stages.forEach((stage) => {
+            const row = document.createElement('div');
+            row.className = 'hub-apply-progress-row';
+            row.dataset.state = 'pending';
+            if (stage.stage_id) row.setAttribute('data-stage-id', stage.stage_id);
+            const indexLabel = stage.index && stage.total ? `${stage.index}/${stage.total}` : '';
+            row.innerHTML = `
+              <span class="hub-apply-progress-index">${indexLabel}</span>
+              <span class="hub-apply-progress-message">${stage.label || stage.stage_id || ''}</span>
+            `;
+            progress.appendChild(row);
+          });
+          return;
+        }
+        if (event.event === 'complete') {
+          const summary = document.createElement('div');
+          summary.className = 'hub-apply-progress-row';
+          summary.dataset.state = event.ok ? 'done' : 'error';
+          summary.innerHTML = `<span class="hub-apply-progress-message">${event.message || ''}</span>`;
+          progress.appendChild(summary);
+          progress.classList.toggle('is-error', !event.ok);
+          progress.classList.toggle('is-success', !!event.ok);
+          return;
+        }
+        const stageId = event.stage_id || '';
+        let row = progress.querySelector(`[data-stage-id="${stageId}"]`);
+        if (!row) {
+          row = document.createElement('div');
+          row.className = 'hub-apply-progress-row';
+          if (stageId) row.setAttribute('data-stage-id', stageId);
+          progress.appendChild(row);
+        }
+        const state =
+          event.event === 'stage_error' ? 'error' :
+          event.event === 'stage_done' ? 'done' : 'active';
+        row.dataset.state = state;
+        const indexLabel = event.index && event.total ? `${event.index}/${event.total}` : '';
+        row.innerHTML = `
+          <span class="hub-apply-progress-index">${indexLabel}</span>
+          <span class="hub-apply-progress-message">${event.message || event.label || ''}</span>
+        `;
+      };
+
+      form.addEventListener('submit', async (submitEvent) => {
+        submitEvent.preventDefault();
+        if (button.disabled) return;
+        progress.innerHTML = '<div class="fw-semibold mb-2">Applying long-term settings</div>';
+        showProgress();
+        setBusy(true);
+        try {
+          const response = await fetch(`${form.action}?stream=1`, {
+            method: 'POST',
+            body: new FormData(form),
+            headers: {
+              Accept: 'application/x-ndjson',
+              'X-Requested-With': 'fetch',
+            },
+          });
+          if (!response.ok || !response.body) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
+          let finalEvent = null;
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed) continue;
+              const event = JSON.parse(trimmed);
+              renderEvent(event);
+              if (event.event === 'complete') finalEvent = event;
+            }
+          }
+          if (buffer.trim()) {
+            const event = JSON.parse(buffer.trim());
+            renderEvent(event);
+            if (event.event === 'complete') finalEvent = event;
+          }
+          if (finalEvent && finalEvent.ok === false) {
+            throw new Error(finalEvent.message || 'Settings update failed');
+          }
+          if (finalEvent && finalEvent.backup_ok === false) {
+            progress.classList.remove('is-success');
+            progress.classList.add('is-error');
+          }
+        } catch (error) {
+          renderEvent({
+            event: 'complete',
+            ok: false,
+            message: String(error.message || error),
+          });
+        } finally {
+          setBusy(false);
+        }
+      });
+    })();
+  </script>
 {% endblock %}

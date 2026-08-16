@@ -21,11 +21,12 @@ exec podman run --rm --replace -d \
   --name thinginohub \
   -p 8080:8080 \
   --env HUB_STATE_PATH=/data/camera-state.yaml \
+  --env HUB_HISTORY_DB=/data/hub-history.sqlite3 \
   --env HUB_UI_HOST=0.0.0.0 \
   --env HUB_UI_PORT=8080 \
   --env HUB_UI_USERNAME="$UI_USERNAME" \
   --env HUB_UI_PASSWORD="$UI_PASSWORD" \
-  --mount type=bind,src="$SCRIPT_DIR/app",dst=/app/app,relabel=private \
+  --mount type=bind,src="$SCRIPT_DIR/app",dst=/app/app,relabel=shared \
   --mount type=bind,src="$SCRIPT_DIR/config.yaml",dst=/config/config.yaml,relabel=private \
   --mount type=bind,src="$SCRIPT_DIR/data",dst=/data,relabel=private \
   "$IMAGE_NAME"
